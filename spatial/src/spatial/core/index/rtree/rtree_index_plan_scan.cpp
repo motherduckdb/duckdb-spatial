@@ -193,8 +193,8 @@ public:
 		}
 
 		// If there are no table filters pushed down into the get, we can just replace the get with the index scan
-		const auto cardinality = get.function.cardinality(context, bind_data.get());
 		get.function = RTreeIndexScanFunction::GetFunction();
+		const auto cardinality = get.function.cardinality(context, bind_data.get());
 		get.has_estimated_cardinality = cardinality->has_estimated_cardinality;
 		get.estimated_cardinality = cardinality->estimated_cardinality;
 		get.bind_data = std::move(bind_data);
