@@ -71,6 +71,10 @@ if(NOT EXISTS ${CMAKE_BINARY_DIR}/deps)
   if(NOT DEPENDENCIES_BUILD_RESULT EQUAL 0)
     message(FATAL_ERROR "Could not build dependencies project")
   endif()
+else()
+  message(STATUS "Dependencies already built")
+  file(GLOB_RECURSE ALL_FILES "${CMAKE_BINARY_DIR}/deps/*")
+  message(STATUS "Files: ${ALL_FILES}")
 endif()
 
 # annoyingly for expat on windows
