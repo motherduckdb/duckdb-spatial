@@ -935,7 +935,7 @@ constexpr ShapeTypeEntry shape_type_map[] = {
 struct Shapefile_Meta {
 
 	struct ShapeFileMetaBindData final : TableFunctionData {
-		vector<string> files;
+		vector<OpenFileInfo> files;
 	};
 
 	static unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &input,
@@ -947,7 +947,7 @@ struct Shapefile_Meta {
 		auto file_list = multi_file_reader->CreateFileList(context, input.inputs[0], FileGlobOptions::ALLOW_EMPTY);
 
 		for (auto &file : file_list->Files()) {
-			if (StringUtil::EndsWith(StringUtil::Lower(file), ".shp")) {
+			if (StringUtil::EndsWith(StringUtil::Lower(file.path), ".shp")) {
 				result->files.push_back(file);
 			}
 		}
@@ -977,7 +977,7 @@ struct Shapefile_Meta {
 		ShapeFileMetaGlobalState() : current_file_idx(0) {
 		}
 		idx_t current_file_idx;
-		vector<string> files;
+		vector<OpenFileInfo> files;
 	};
 
 	static unique_ptr<GlobalTableFunctionState> InitGlobal(ClientContext &context, TableFunctionInitInput &input) {
@@ -1011,17 +1011,17 @@ struct Shapefile_Meta {
 		auto output_count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, bind_data.files.size() - state.current_file_idx);
 
 		for (idx_t out_idx = 0; out_idx < output_count; out_idx++) {
-			auto &file_name = bind_data.files[state.current_file_idx + out_idx];
+			auto &file = bind_data.files[state.current_file_idx + out_idx];
 
-			auto file_handle = fs.OpenFile(file_name, FileFlags::FILE_FLAGS_READ);
-			auto shp_handle = OpenSHPFile(fs, file_name.c_str());
+			auto file_handle = fs.OpenFile(file, FileFlags::FILE_FLAGS_READ);
+			auto shp_handle = OpenSHPFile(fs, file.path.c_str());
 
 			double min_bound[4];
 			double max_bound[4];
 			int shape_type;
 			int record_count;
 			SHPGetInfo(shp_handle.get(), &record_count, &shape_type, min_bound, max_bound);
-			file_name_data[out_idx] = StringVector::AddString(file_name_vector, file_name);
+			file_name_data[out_idx] = StringVector::AddString(file_name_vector, file.path);
 			shape_type_data[out_idx] = 0;
 			for (size_t shape_type_idx = 0; shape_type_idx < sizeof(shape_type_map) / sizeof(ShapeTypeEntry);
 			     shape_type_idx++) {

@@ -62,6 +62,7 @@ public:
 
 	//! Ensures that the node allocation counts match the node counts.
 	void VerifyAllocations(IndexLock &state) override;
+	void VerifyBuffers(IndexLock &l) override;
 
 	string GetConstraintViolationMessage(VerifyExistenceType verify_type, idx_t failed_index,
 	                                     DataChunk &input) override {

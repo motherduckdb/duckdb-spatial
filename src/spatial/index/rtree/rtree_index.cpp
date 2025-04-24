@@ -290,6 +290,9 @@ string RTreeIndex::VerifyAndToString(IndexLock &state, const bool only_verify) {
 void RTreeIndex::VerifyAllocations(IndexLock &state) {
 }
 
+void RTreeIndex::VerifyBuffers(IndexLock &l) {
+}
+
 //------------------------------------------------------------------------------
 // Register Index Type
 //------------------------------------------------------------------------------
