@@ -569,6 +569,7 @@ SinkFinalizeType PhysicalSpatialJoin::Finalize(Pipeline &pipeline, Event &event,
 		// The key column is always the first column in the layout.
 		constexpr auto build_side_key_col = 0;      // TODO: layout_key_col_idx
 		D_ASSERT(build_side_key_types.size() == 1); // TODO: remove this
+
 		gstate.collection->Gather(row_pointer_vector, sel, row_count, build_side_key_col, geom_vec, sel, nullptr);
 
 		// Get a pointer to what we just gathered
@@ -755,8 +756,8 @@ OperatorResultType PhysicalSpatialJoin::ExecuteInternal(ExecutionContext &contex
 				continue;
 			}
 
-			const auto geom_ptr = FlatVector::GetData<geometry_t>(lstate.probe_side_key_chunk.data[0]);
-			const auto &geom = geom_ptr[lstate.input_index];
+			const auto geom_ptr = UnifiedVectorFormat::GetData<geometry_t>(lstate.probe_side_key_vformat);
+			const auto &geom = geom_ptr[geom_idx];
 
 			Box2D<float> bbox;
 			if (!geom.TryGetCachedBounds(bbox)) {
@@ -821,6 +822,7 @@ OperatorResultType PhysicalSpatialJoin::ExecuteInternal(ExecutionContext &contex
 				const auto build_side_col_idx = build_side_output_columns[i];
 				D_ASSERT(target.GetType() == build_side_output_types[i]);
 
+				// TODO: We should use cached cast vectors here to improve performance of nested array payloads
 				gstate.collection->Gather(row_pointers, lstate.build_side_source_sel, scan_count, build_side_col_idx,
 				                          target, lstate.build_side_target_sel, nullptr);
 			}
