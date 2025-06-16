@@ -4794,7 +4794,7 @@ struct ST_GeomFromWKB {
 				throw InvalidInputException("ST_Polygon2DFromWKB: WKB is not a POLYGON");
 			}
 
-			const auto ring_count = geom.get_vertex_count();
+			const auto ring_count = geom.get_part_count();
 
 			polygons[i].offset = total_ring_count;
 			polygons[i].length = ring_count;
@@ -6627,7 +6627,7 @@ struct ST_NGeometries {
 			case sgl::geometry_type::MULTI_LINESTRING:
 			case sgl::geometry_type::MULTI_POLYGON:
 			case sgl::geometry_type::GEOMETRY_COLLECTION:
-				return static_cast<int32_t>(geom.get_vertex_count());
+				return static_cast<int32_t>(geom.get_part_count());
 			default:
 				D_ASSERT(false);
 				return 0;
@@ -6695,7 +6695,7 @@ struct ST_NInteriorRings {
 				    return 0;
 			    }
 
-			    const auto n_rings = static_cast<int32_t>(geom.get_vertex_count());
+			    const auto n_rings = static_cast<int32_t>(geom.get_part_count());
 			    return n_rings == 0 ? 0 : n_rings - 1;
 		    });
 	}
