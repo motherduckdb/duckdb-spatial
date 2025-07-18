@@ -9,7 +9,7 @@
 #include "duckdb/catalog/dependency_list.hpp"
 #include "duckdb/common/mutex.hpp"
 #include "duckdb/function/function_set.hpp"
-#include "duckdb/main/extension_util.hpp"
+#include "duckdb/main/extension/extension_loader.hpp"
 #include "duckdb/optimizer/matcher/expression_matcher.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
@@ -229,17 +229,17 @@ static void RTreeIndexDumpExecute(ClientContext &context, TableFunctionInput &da
 //-------------------------------------------------------------------------
 // Register
 //-------------------------------------------------------------------------
-void RTreeModule::RegisterIndexPragmas(DatabaseInstance &db) {
+void RTreeModule::RegisterIndexPragmas(ExtensionLoader &loader) {
 
 	TableFunction info_function("pragma_rtree_index_info", {}, RTreeIndexInfoExecute, RTreeindexInfoBind,
 	                            RTreeIndexInfoInit);
 
-	ExtensionUtil::RegisterFunction(db, info_function);
+	loader.RegisterFunction(info_function);
 
 	TableFunction dump_function("rtree_index_dump", {LogicalType::VARCHAR}, RTreeIndexDumpExecute, RTreeIndexDumpBind,
 	                            RTreeIndexDumpInit);
 
-	ExtensionUtil::RegisterFunction(db, dump_function);
+	loader.RegisterFunction(dump_function);
 }
 
 } // namespace duckdb

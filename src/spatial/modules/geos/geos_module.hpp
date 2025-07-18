@@ -2,8 +2,8 @@
 
 namespace duckdb {
 
-class DatabaseInstance;
+class ExtensionLoader;
 
-void RegisterGEOSModule(DatabaseInstance &db);
+void RegisterGEOSModule(ExtensionLoader &loader);
 
 } // namespace duckdb

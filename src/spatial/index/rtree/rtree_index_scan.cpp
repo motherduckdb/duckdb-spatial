@@ -12,7 +12,7 @@
 #include "duckdb/storage/table/scan_state.hpp"
 #include "duckdb/transaction/duck_transaction.hpp"
 #include "duckdb/transaction/local_storage.hpp"
-#include "duckdb/main/extension_util.hpp"
+#include "duckdb/main/extension/extension_loader.hpp"
 #include "duckdb/catalog/catalog_entry/duck_index_entry.hpp"
 #include "duckdb/storage/data_table.hpp"
 
@@ -252,8 +252,8 @@ TableFunction RTreeIndexScanFunction::GetFunction() {
 //-------------------------------------------------------------------------
 // Register
 //-------------------------------------------------------------------------
-void RTreeModule::RegisterIndexScan(DatabaseInstance &db) {
-	ExtensionUtil::RegisterFunction(db, RTreeIndexScanFunction::GetFunction());
+void RTreeModule::RegisterIndexScan(ExtensionLoader &loader) {
+	loader.RegisterFunction(RTreeIndexScanFunction::GetFunction());
 }
 
 } // namespace duckdb

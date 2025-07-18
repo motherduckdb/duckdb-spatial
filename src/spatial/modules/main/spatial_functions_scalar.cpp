@@ -14,6 +14,7 @@
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/common/vector_operations/septenary_executor.hpp"
+#include "duckdb/main/extension/extension_loader.hpp"
 
 // Extra
 #include "yyjson.h"
@@ -209,8 +210,8 @@ struct ST_Affine {
 		    });
 	}
 
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_Affine", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_Affine", [](ScalarFunctionBuilder &func) {
 			// GEOMETRY (3D)
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom", GeoTypes::GEOMETRY());
@@ -270,7 +271,7 @@ struct ST_Affine {
 		});
 
 		// Add helper macros
-		FunctionBuilder::RegisterMacro(db, "ST_Scale", [](MacroFunctionBuilder &builder) {
+		FunctionBuilder::RegisterMacro(loader, "ST_Scale", [](MacroFunctionBuilder &builder) {
 			builder.AddDefinition(
 			    {"geom", "xs", "ys", "zs"}, "ST_Affine(geom, xs, 0, 0, 0, ys, 0, 0, 0, zs, 0, 0, 0)",
 			    "Scales a geometry in X, Y and Z direction. This is a shorthand macro for calling ST_Affine.");
@@ -279,7 +280,7 @@ struct ST_Affine {
 			    "Scales a geometry in X and Y direction. This is a shorthand macro for calling ST_Affine.");
 		});
 
-		FunctionBuilder::RegisterMacro(db, "ST_Translate", [](MacroFunctionBuilder &builder) {
+		FunctionBuilder::RegisterMacro(loader, "ST_Translate", [](MacroFunctionBuilder &builder) {
 			builder.AddDefinition(
 			    {"geom", "dx", "dy", "dz"}, "ST_Affine(geom, 1, 0, dx, 0, 1, dy, 0, 0, 1, dz, 0, 0)",
 			    "Translates a geometry in X, Y and Z direction. This is a shorthand macro for calling ST_Affine.");
@@ -288,28 +289,28 @@ struct ST_Affine {
 			    "Translates a geometry in X and Y direction. This is a shorthand macro for calling ST_Affine.");
 		});
 
-		FunctionBuilder::RegisterMacro(db, "ST_TransScale", [](MacroFunctionBuilder &builder) {
+		FunctionBuilder::RegisterMacro(loader, "ST_TransScale", [](MacroFunctionBuilder &builder) {
 			builder.AddDefinition({"geom", "dx", "dy", "xs", "ys"},
 			                      "ST_Affine(geom, xs, 0, 0, 0, ys, 0, 0, 0, 1, dx * xs, dy * ys, 0)",
 			                      "Translates and then scales a geometry in X and Y direction. This is a shorthand "
 			                      "macro for calling ST_Affine.");
 		});
 
-		FunctionBuilder::RegisterMacro(db, "ST_RotateX", [](MacroFunctionBuilder &builder) {
+		FunctionBuilder::RegisterMacro(loader, "ST_RotateX", [](MacroFunctionBuilder &builder) {
 			builder.AddDefinition(
 			    {"geom", "radians"},
 			    "ST_Affine(geom, 1, 0, 0, 0, COS(radians), -SIN(radians), 0, SIN(radians), COS(radians), 0, 0, 0)",
 			    "Rotates a geometry around the X axis. This is a shorthand macro for calling ST_Affine.");
 		});
 
-		FunctionBuilder::RegisterMacro(db, "ST_RotateY", [](MacroFunctionBuilder &builder) {
+		FunctionBuilder::RegisterMacro(loader, "ST_RotateY", [](MacroFunctionBuilder &builder) {
 			builder.AddDefinition(
 			    {"geom", "radians"},
 			    "ST_Affine(geom, COS(radians), 0, SIN(radians), 0, 1, 0, -SIN(radians), 0, COS(radians), 0, 0, 0)",
 			    "Rotates a geometry around the Y axis. This is a shorthand macro for calling ST_Affine.");
 		});
 
-		FunctionBuilder::RegisterMacro(db, "ST_RotateZ", [](MacroFunctionBuilder &builder) {
+		FunctionBuilder::RegisterMacro(loader, "ST_RotateZ", [](MacroFunctionBuilder &builder) {
 			builder.AddDefinition(
 			    {"geom", "radians"},
 			    "ST_Affine(geom, COS(radians), -SIN(radians), 0, SIN(radians), COS(radians), 0, 0, 0, 1, 0, 0, 0)",
@@ -317,7 +318,7 @@ struct ST_Affine {
 		});
 
 		// Alias for ST_RotateZ
-		FunctionBuilder::RegisterMacro(db, "ST_Rotate", [](MacroFunctionBuilder &builder) {
+		FunctionBuilder::RegisterMacro(loader, "ST_Rotate", [](MacroFunctionBuilder &builder) {
 			builder.AddDefinition({"geom", "radians"}, "ST_RotateZ(geom, radians)", "Alias of ST_RotateZ");
 		});
 	}
@@ -449,9 +450,9 @@ struct ST_Area {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
+	static void Register(ExtensionLoader &loader) {
 
-		FunctionBuilder::RegisterScalar(db, "ST_Area", [](ScalarFunctionBuilder &func) {
+		FunctionBuilder::RegisterScalar(loader, "ST_Area", [](ScalarFunctionBuilder &func) {
 			// GEOMETRY
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom", GeoTypes::GEOMETRY());
@@ -787,8 +788,8 @@ struct ST_AsGeoJSON {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_AsGeoJSON", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_AsGeoJSON", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom", GeoTypes::GEOMETRY());
 				variant.SetReturnType(LogicalType::JSON());
@@ -881,8 +882,8 @@ struct ST_AsText {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_AsText", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_AsText", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom", GeoTypes::GEOMETRY());
 				variant.SetReturnType(LogicalType::VARCHAR);
@@ -955,8 +956,8 @@ struct ST_AsWKB {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_AsWKB", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_AsWKB", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom", GeoTypes::GEOMETRY());
 				variant.SetReturnType(GeoTypes::WKB_BLOB());
@@ -1022,8 +1023,8 @@ struct ST_AsHEXWKB {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_AsHEXWKB", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_AsHEXWKB", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom", GeoTypes::GEOMETRY());
 				variant.SetReturnType(LogicalType::VARCHAR);
@@ -1259,8 +1260,8 @@ struct ST_AsSVG {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_AsSVG", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_AsSVG", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom", GeoTypes::GEOMETRY());
 				variant.AddParameter("relative", LogicalType::BOOLEAN);
@@ -1511,8 +1512,8 @@ struct ST_Centroid {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_Centroid", [&](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_Centroid", [&](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom", GeoTypes::GEOMETRY());
 				variant.SetReturnType(GeoTypes::GEOMETRY());
@@ -1711,8 +1712,8 @@ struct ST_Collect {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_Collect", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_Collect", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geoms", LogicalType::LIST(GeoTypes::GEOMETRY()));
 				variant.SetReturnType(GeoTypes::GEOMETRY());
@@ -1896,8 +1897,8 @@ struct ST_CollectionExtract {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_CollectionExtract", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_CollectionExtract", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom", GeoTypes::GEOMETRY());
 				variant.AddParameter("type", LogicalType::INTEGER);
@@ -2065,8 +2066,8 @@ struct ST_Contains {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_Contains", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_Contains", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom1", GeoTypes::POLYGON_2D());
 				variant.AddParameter("geom2", GeoTypes::POINT_2D());
@@ -2125,8 +2126,8 @@ struct ST_Dimension {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_Dimension", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_Dimension", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom", GeoTypes::GEOMETRY());
 				variant.SetReturnType(LogicalType::INTEGER);
@@ -2292,8 +2293,8 @@ struct ST_Distance {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_Distance", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_Distance", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("point1", GeoTypes::POINT_2D());
 				variant.AddParameter("point2", GeoTypes::POINT_2D());
@@ -2493,9 +2494,9 @@ struct ST_Dump {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
+	static void Register(ExtensionLoader &loader) {
 
-		FunctionBuilder::RegisterScalar(db, "ST_Dump", [](ScalarFunctionBuilder &func) {
+		FunctionBuilder::RegisterScalar(loader, "ST_Dump", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom", GeoTypes::GEOMETRY());
 
@@ -2646,8 +2647,8 @@ struct ST_Extent {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_Extent", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_Extent", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom", GeoTypes::GEOMETRY());
 				variant.SetReturnType(GeoTypes::BOX_2D());
@@ -2731,8 +2732,8 @@ struct ST_Extent_Approx {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_Extent_Approx", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_Extent_Approx", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom", GeoTypes::GEOMETRY());
 				variant.SetReturnType(GeoTypes::BOX_2DF());
@@ -2873,8 +2874,8 @@ struct ST_ExteriorRing {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_ExteriorRing", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_ExteriorRing", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom", GeoTypes::GEOMETRY());
 				variant.SetReturnType(GeoTypes::GEOMETRY());
@@ -3192,8 +3193,8 @@ struct ST_FlipCoordinates {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_FlipCoordinates", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_FlipCoordinates", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom", GeoTypes::GEOMETRY());
 				variant.SetReturnType(GeoTypes::GEOMETRY());
@@ -3304,8 +3305,8 @@ struct ST_ForceBase {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, IMPL::NAME, [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, IMPL::NAME, [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom", GeoTypes::GEOMETRY());
 
@@ -3519,8 +3520,8 @@ struct ST_GeometryType {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_GeometryType", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_GeometryType", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom", GeoTypes::GEOMETRY());
 				variant.SetReturnType(LogicalTypeId::ANY);
@@ -3657,7 +3658,7 @@ struct ST_GeomFromHEXWKB {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
+	static void Register(ExtensionLoader &loader) {
 
 		// Our WKB reader also parses EWKB, even though it will just ignore SRID's.
 		// so we'll just add an alias for now. In the future, once we actually handle
@@ -3665,7 +3666,7 @@ struct ST_GeomFromHEXWKB {
 		// the two formats.
 
 		for (const auto &alias : {"ST_GeomFromHEXWKB", "ST_GeomFromHEXEWKB"}) {
-			FunctionBuilder::RegisterScalar(db, alias, [](ScalarFunctionBuilder &func) {
+			FunctionBuilder::RegisterScalar(loader, alias, [](ScalarFunctionBuilder &func) {
 				func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 					variant.AddParameter("hexwkb", LogicalType::VARCHAR);
 					variant.SetReturnType(GeoTypes::GEOMETRY());
@@ -4077,8 +4078,8 @@ struct ST_GeomFromGeoJSON {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_GeomFromGeoJSON", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_GeomFromGeoJSON", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geojson", LogicalType::JSON());
 				variant.SetReturnType(GeoTypes::GEOMETRY());
@@ -4211,8 +4212,8 @@ struct ST_GeomFromText {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_GeomFromText", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_GeomFromText", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("wkt", LogicalType::VARCHAR);
 				variant.SetReturnType(GeoTypes::GEOMETRY());
@@ -4527,8 +4528,8 @@ struct ST_GeomFromWKB {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_Point2DFromWKB", [](ScalarFunctionBuilder &builder) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_Point2DFromWKB", [](ScalarFunctionBuilder &builder) {
 			builder.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("point", GeoTypes::POINT_2D());
 				variant.SetReturnType(GeoTypes::GEOMETRY());
@@ -4543,7 +4544,7 @@ struct ST_GeomFromWKB {
 			builder.SetTag("category", "conversion");
 		});
 
-		FunctionBuilder::RegisterScalar(db, "ST_LineString2DFromWKB", [](ScalarFunctionBuilder &builder) {
+		FunctionBuilder::RegisterScalar(loader, "ST_LineString2DFromWKB", [](ScalarFunctionBuilder &builder) {
 			builder.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("linestring", GeoTypes::LINESTRING_2D());
 				variant.SetReturnType(GeoTypes::GEOMETRY());
@@ -4558,7 +4559,7 @@ struct ST_GeomFromWKB {
 			builder.SetTag("category", "conversion");
 		});
 
-		FunctionBuilder::RegisterScalar(db, "ST_Polygon2DFromWKB", [](ScalarFunctionBuilder &builder) {
+		FunctionBuilder::RegisterScalar(loader, "ST_Polygon2DFromWKB", [](ScalarFunctionBuilder &builder) {
 			builder.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("polygon", GeoTypes::POLYGON_2D());
 				variant.SetReturnType(GeoTypes::GEOMETRY());
@@ -4573,7 +4574,7 @@ struct ST_GeomFromWKB {
 			builder.SetTag("category", "conversion");
 		});
 
-		FunctionBuilder::RegisterScalar(db, "ST_GeomFromWKB", [](ScalarFunctionBuilder &builder) {
+		FunctionBuilder::RegisterScalar(loader, "ST_GeomFromWKB", [](ScalarFunctionBuilder &builder) {
 			builder.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("wkb", GeoTypes::WKB_BLOB());
 				variant.SetReturnType(GeoTypes::GEOMETRY());
@@ -4665,8 +4666,8 @@ struct ST_HasZ {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_HasZ", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_HasZ", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom", GeoTypes::GEOMETRY());
 				variant.SetReturnType(LogicalType::BOOLEAN);
@@ -4758,8 +4759,8 @@ struct ST_HasM {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_HasM", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_HasM", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom", GeoTypes::GEOMETRY());
 				variant.SetReturnType(LogicalType::BOOLEAN);
@@ -4827,8 +4828,8 @@ struct ST_LineInterpolatePoint {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_LineInterpolatePoint", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_LineInterpolatePoint", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("line", GeoTypes::GEOMETRY());
 				variant.AddParameter("fraction", LogicalType::DOUBLE);
@@ -4903,8 +4904,8 @@ struct ST_LineInterpolatePoints {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_LineInterpolatePoints", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_LineInterpolatePoints", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("line", GeoTypes::GEOMETRY());
 				variant.AddParameter("fraction", LogicalType::DOUBLE);
@@ -4964,8 +4965,8 @@ struct ST_LineSubstring {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_LineSubstring", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_LineSubstring", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("line", GeoTypes::GEOMETRY());
 				variant.AddParameter("start_fraction", LogicalType::DOUBLE);
@@ -5080,8 +5081,8 @@ struct ST_ZMFlag {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_ZMFlag", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_ZMFlag", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom", GeoTypes::GEOMETRY());
 				variant.SetReturnType(LogicalType::UTINYINT);
@@ -5176,8 +5177,8 @@ struct ST_Distance_Sphere {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_Distance_Sphere", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_Distance_Sphere", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom1", GeoTypes::GEOMETRY());
 				variant.AddParameter("geom2", GeoTypes::GEOMETRY());
@@ -5340,10 +5341,10 @@ struct ST_Hilbert {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
+	static void Register(ExtensionLoader &loader) {
 		// TODO: All of these needs examples and docs
 
-		FunctionBuilder::RegisterScalar(db, "ST_Hilbert", [](ScalarFunctionBuilder &func) {
+		FunctionBuilder::RegisterScalar(loader, "ST_Hilbert", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("x", LogicalType::DOUBLE);
 				variant.AddParameter("y", LogicalType::DOUBLE);
@@ -5425,8 +5426,8 @@ struct ST_Intersects {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_Intersects", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_Intersects", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("box1", GeoTypes::BOX_2D());
 				variant.AddParameter("box2", GeoTypes::BOX_2D());
@@ -5493,8 +5494,8 @@ struct ST_IntersectsExtent {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_Intersects_Extent", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_Intersects_Extent", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom1", GeoTypes::GEOMETRY());
 				variant.AddParameter("geom2", GeoTypes::GEOMETRY());
@@ -5551,8 +5552,8 @@ struct ST_IsClosed {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_IsClosed", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_IsClosed", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom", GeoTypes::GEOMETRY());
 				variant.SetReturnType(LogicalType::BOOLEAN);
@@ -5618,8 +5619,8 @@ struct ST_IsEmpty {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_IsEmpty", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_IsEmpty", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom", GeoTypes::GEOMETRY());
 				variant.SetReturnType(LogicalType::BOOLEAN);
@@ -5717,8 +5718,8 @@ struct ST_Length {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_Length", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_Length", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom", GeoTypes::GEOMETRY());
 				variant.SetReturnType(LogicalType::DOUBLE);
@@ -5796,8 +5797,8 @@ struct ST_MakeEnvelope {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_MakeEnvelope", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_MakeEnvelope", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("min_x", LogicalType::DOUBLE);
 				variant.AddParameter("min_y", LogicalType::DOUBLE);
@@ -6000,8 +6001,8 @@ struct ST_MakeLine {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_MakeLine", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_MakeLine", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geoms", LogicalType::LIST(GeoTypes::GEOMETRY()));
 				variant.SetReturnType(GeoTypes::GEOMETRY());
@@ -6150,8 +6151,8 @@ struct ST_MakePolygon {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_MakePolygon", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_MakePolygon", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("shell", GeoTypes::GEOMETRY());
 				variant.SetReturnType(GeoTypes::GEOMETRY());
@@ -6253,8 +6254,8 @@ struct ST_Multi {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_Multi", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_Multi", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom", GeoTypes::GEOMETRY());
 				variant.SetReturnType(GeoTypes::GEOMETRY());
@@ -6321,10 +6322,10 @@ struct ST_NGeometries {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
+	static void Register(ExtensionLoader &loader) {
 		// TODO: Maybe make a macro for the aliases
 		for (auto &alias : {"ST_NumGeometries", "ST_NGeometries"}) {
-			FunctionBuilder::RegisterScalar(db, alias, [](ScalarFunctionBuilder &func) {
+			FunctionBuilder::RegisterScalar(loader, alias, [](ScalarFunctionBuilder &func) {
 				func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 					variant.AddParameter("geom", GeoTypes::GEOMETRY());
 					variant.SetReturnType(LogicalType::INTEGER);
@@ -6394,10 +6395,10 @@ struct ST_NInteriorRings {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
+	static void Register(ExtensionLoader &loader) {
 		// TODO: maybe make a macro for the aliases
 		for (auto &alias : {"ST_NumInteriorRings", "ST_NInteriorRings"}) {
-			FunctionBuilder::RegisterScalar(db, alias, [](ScalarFunctionBuilder &func) {
+			FunctionBuilder::RegisterScalar(loader, alias, [](ScalarFunctionBuilder &func) {
 				func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 					variant.AddParameter("geom", GeoTypes::GEOMETRY());
 					variant.SetReturnType(LogicalType::INTEGER);
@@ -6490,7 +6491,7 @@ struct ST_NPoints {
 	static void ExecuteGeometry(DataChunk &args, ExpressionState &state, Vector &result) {
 		auto &lstate = LocalState::ResetAndGet(state);
 
-		UnaryExecutor::Execute<string_t, int32_t>(args.data[0], result, args.size(), [&](const string_t &blob) {
+		UnaryExecutor::Execute<string_t, uint32_t>(args.data[0], result, args.size(), [&](const string_t &blob) {
 			sgl::geometry geom;
 			lstate.Deserialize(blob, geom);
 			return sgl::ops::vertex_count(&geom);
@@ -6510,10 +6511,10 @@ struct ST_NPoints {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
+	static void Register(ExtensionLoader &loader) {
 
 		for (const auto &alias : {"ST_NumPoints", "ST_NPoints"}) {
-			FunctionBuilder::RegisterScalar(db, alias, [](ScalarFunctionBuilder &func) {
+			FunctionBuilder::RegisterScalar(loader, alias, [](ScalarFunctionBuilder &func) {
 				func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 					variant.AddParameter("geom", GeoTypes::GEOMETRY());
 					variant.SetReturnType(LogicalType::UINTEGER);
@@ -6645,8 +6646,8 @@ struct ST_Perimeter {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_Perimeter", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_Perimeter", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom", GeoTypes::GEOMETRY());
 				variant.SetReturnType(LogicalType::DOUBLE);
@@ -6800,8 +6801,8 @@ struct ST_Point {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_Point", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_Point", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("x", LogicalType::DOUBLE);
 				variant.AddParameter("y", LogicalType::DOUBLE);
@@ -6818,7 +6819,7 @@ struct ST_Point {
 			func.SetTag("category", "construction");
 		});
 
-		FunctionBuilder::RegisterScalar(db, "ST_Point2D", [](ScalarFunctionBuilder &func) {
+		FunctionBuilder::RegisterScalar(loader, "ST_Point2D", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("x", LogicalType::DOUBLE);
 				variant.AddParameter("y", LogicalType::DOUBLE);
@@ -6832,7 +6833,7 @@ struct ST_Point {
 			func.SetTag("category", "construction");
 		});
 
-		FunctionBuilder::RegisterScalar(db, "ST_Point3D", [](ScalarFunctionBuilder &func) {
+		FunctionBuilder::RegisterScalar(loader, "ST_Point3D", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("x", LogicalType::DOUBLE);
 				variant.AddParameter("y", LogicalType::DOUBLE);
@@ -6847,7 +6848,7 @@ struct ST_Point {
 			func.SetTag("category", "construction");
 		});
 
-		FunctionBuilder::RegisterScalar(db, "ST_Point4D", [](ScalarFunctionBuilder &func) {
+		FunctionBuilder::RegisterScalar(loader, "ST_Point4D", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("x", LogicalType::DOUBLE);
 				variant.AddParameter("y", LogicalType::DOUBLE);
@@ -6978,8 +6979,8 @@ struct ST_PointN {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_PointN", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_PointN", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom", GeoTypes::GEOMETRY());
 				variant.AddParameter("index", LogicalType::INTEGER);
@@ -7065,8 +7066,8 @@ struct ST_Points {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_Points", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_Points", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom", GeoTypes::GEOMETRY());
 				variant.SetReturnType(GeoTypes::GEOMETRY());
@@ -7193,8 +7194,8 @@ struct ST_QuadKey {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_QuadKey", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_QuadKey", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("longitude", LogicalType::DOUBLE);
 				variant.AddParameter("latitude", LogicalType::DOUBLE);
@@ -7493,8 +7494,8 @@ struct ST_RemoveRepeatedPoints {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_RemoveRepeatedPoints", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_RemoveRepeatedPoints", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("line", GeoTypes::LINESTRING_2D());
 				variant.SetReturnType(GeoTypes::LINESTRING_2D());
@@ -7613,8 +7614,8 @@ struct ST_StartPoint {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_StartPoint", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_StartPoint", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom", GeoTypes::GEOMETRY());
 				variant.SetReturnType(GeoTypes::GEOMETRY());
@@ -7737,8 +7738,8 @@ struct ST_EndPoint {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, "ST_EndPoint", [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_EndPoint", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom", GeoTypes::GEOMETRY());
 				variant.SetReturnType(GeoTypes::GEOMETRY());
@@ -7790,9 +7791,9 @@ struct ST_Within {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
+	static void Register(ExtensionLoader &loader) {
 		// ST_Within is the inverse of ST_Contains
-		FunctionBuilder::RegisterScalar(db, "ST_Within", [](ScalarFunctionBuilder &func) {
+		FunctionBuilder::RegisterScalar(loader, "ST_Within", [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom1", GeoTypes::POINT_2D());
 				variant.AddParameter("geom2", GeoTypes::POLYGON_2D());
@@ -7877,8 +7878,8 @@ struct PointAccessFunctionBase {
 		result.Reference(*n_child);
 	}
 
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, OP::NAME, [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, OP::NAME, [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom", GeoTypes::GEOMETRY());
 				variant.SetReturnType(LogicalType::DOUBLE);
@@ -7894,7 +7895,7 @@ struct PointAccessFunctionBase {
 		});
 
 		if (OP::ORDINATE == VertexOrdinate::X || OP::ORDINATE == VertexOrdinate::Y) {
-			FunctionBuilder::RegisterScalar(db, OP::NAME, [](ScalarFunctionBuilder &func) {
+			FunctionBuilder::RegisterScalar(loader, OP::NAME, [](ScalarFunctionBuilder &func) {
 				func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 					variant.AddParameter("point", GeoTypes::POINT_2D());
 					variant.SetReturnType(LogicalType::DOUBLE);
@@ -8105,8 +8106,8 @@ struct VertexAggFunctionBase {
 		}
 	}
 
-	static void Register(DatabaseInstance &db) {
-		FunctionBuilder::RegisterScalar(db, OP::NAME, [](ScalarFunctionBuilder &func) {
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, OP::NAME, [](ScalarFunctionBuilder &func) {
 			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
 				variant.AddParameter("geom", GeoTypes::GEOMETRY());
 				variant.SetReturnType(LogicalType::DOUBLE);
@@ -8252,75 +8253,75 @@ struct ST_MMin : VertexAggFunctionBase<ST_MMin, VertexMinAggOp> {
 // Register
 //######################################################################################################################
 
-void RegisterSpatialScalarFunctions(DatabaseInstance &db) {
-	ST_Affine::Register(db);
-	ST_Area::Register(db);
-	ST_AsGeoJSON::Register(db);
-	ST_AsText::Register(db);
-	ST_AsWKB::Register(db);
-	ST_AsHEXWKB::Register(db);
-	ST_AsSVG::Register(db);
-	ST_Centroid::Register(db);
-	ST_Collect::Register(db);
-	ST_CollectionExtract::Register(db);
-	ST_Contains::Register(db);
-	ST_Dimension::Register(db);
-	ST_Distance::Register(db);
-	ST_Dump::Register(db);
-	ST_EndPoint::Register(db);
-	ST_Extent::Register(db);
-	ST_Extent_Approx::Register(db);
-	ST_ExteriorRing::Register(db);
-	ST_FlipCoordinates::Register(db);
-	ST_Force2D::Register(db);
-	ST_Force3DZ::Register(db);
-	ST_Force3DM::Register(db);
-	ST_Force4D::Register(db);
-	ST_GeometryType::Register(db);
-	ST_GeomFromHEXWKB::Register(db);
-	ST_GeomFromGeoJSON::Register(db);
-	ST_GeomFromText::Register(db);
-	ST_GeomFromWKB::Register(db);
-	ST_HasZ::Register(db);
-	ST_HasM::Register(db);
-	ST_LineInterpolatePoint::Register(db);
-	ST_LineInterpolatePoints::Register(db);
-	ST_LineSubstring::Register(db);
-	ST_ZMFlag::Register(db);
-	ST_Distance_Sphere::Register(db);
-	ST_Hilbert::Register(db);
-	ST_Intersects::Register(db);
-	ST_IntersectsExtent::Register(db);
-	ST_IsClosed::Register(db);
-	ST_IsEmpty::Register(db);
-	ST_Length::Register(db);
-	ST_MakeEnvelope::Register(db);
-	ST_MakeLine::Register(db);
-	ST_MakePolygon::Register(db);
-	ST_Multi::Register(db);
-	ST_NGeometries::Register(db);
-	ST_NInteriorRings::Register(db);
-	ST_NPoints::Register(db);
-	ST_Perimeter::Register(db);
-	ST_Point::Register(db);
-	ST_PointN::Register(db);
-	ST_Points::Register(db);
-	ST_QuadKey::Register(db);
-	ST_RemoveRepeatedPoints::Register(db);
-	ST_StartPoint::Register(db);
-	ST_Within::Register(db);
-	ST_X::Register(db);
-	ST_XMax::Register(db);
-	ST_XMin::Register(db);
-	ST_Y::Register(db);
-	ST_YMax::Register(db);
-	ST_YMin::Register(db);
-	ST_Z::Register(db);
-	ST_ZMax::Register(db);
-	ST_ZMin::Register(db);
-	ST_M::Register(db);
-	ST_MMax::Register(db);
-	ST_MMin::Register(db);
+void RegisterSpatialScalarFunctions(ExtensionLoader &loader) {
+	ST_Affine::Register(loader);
+	ST_Area::Register(loader);
+	ST_AsGeoJSON::Register(loader);
+	ST_AsText::Register(loader);
+	ST_AsWKB::Register(loader);
+	ST_AsHEXWKB::Register(loader);
+	ST_AsSVG::Register(loader);
+	ST_Centroid::Register(loader);
+	ST_Collect::Register(loader);
+	ST_CollectionExtract::Register(loader);
+	ST_Contains::Register(loader);
+	ST_Dimension::Register(loader);
+	ST_Distance::Register(loader);
+	ST_Dump::Register(loader);
+	ST_EndPoint::Register(loader);
+	ST_Extent::Register(loader);
+	ST_Extent_Approx::Register(loader);
+	ST_ExteriorRing::Register(loader);
+	ST_FlipCoordinates::Register(loader);
+	ST_Force2D::Register(loader);
+	ST_Force3DZ::Register(loader);
+	ST_Force3DM::Register(loader);
+	ST_Force4D::Register(loader);
+	ST_GeometryType::Register(loader);
+	ST_GeomFromHEXWKB::Register(loader);
+	ST_GeomFromGeoJSON::Register(loader);
+	ST_GeomFromText::Register(loader);
+	ST_GeomFromWKB::Register(loader);
+	ST_HasZ::Register(loader);
+	ST_HasM::Register(loader);
+	ST_LineInterpolatePoint::Register(loader);
+	ST_LineInterpolatePoints::Register(loader);
+	ST_LineSubstring::Register(loader);
+	ST_ZMFlag::Register(loader);
+	ST_Distance_Sphere::Register(loader);
+	ST_Hilbert::Register(loader);
+	ST_Intersects::Register(loader);
+	ST_IntersectsExtent::Register(loader);
+	ST_IsClosed::Register(loader);
+	ST_IsEmpty::Register(loader);
+	ST_Length::Register(loader);
+	ST_MakeEnvelope::Register(loader);
+	ST_MakeLine::Register(loader);
+	ST_MakePolygon::Register(loader);
+	ST_Multi::Register(loader);
+	ST_NGeometries::Register(loader);
+	ST_NInteriorRings::Register(loader);
+	ST_NPoints::Register(loader);
+	ST_Perimeter::Register(loader);
+	ST_Point::Register(loader);
+	ST_PointN::Register(loader);
+	ST_Points::Register(loader);
+	ST_QuadKey::Register(loader);
+	ST_RemoveRepeatedPoints::Register(loader);
+	ST_StartPoint::Register(loader);
+	ST_Within::Register(loader);
+	ST_X::Register(loader);
+	ST_XMax::Register(loader);
+	ST_XMin::Register(loader);
+	ST_Y::Register(loader);
+	ST_YMax::Register(loader);
+	ST_YMin::Register(loader);
+	ST_Z::Register(loader);
+	ST_ZMax::Register(loader);
+	ST_ZMin::Register(loader);
+	ST_M::Register(loader);
+	ST_MMax::Register(loader);
+	ST_MMin::Register(loader);
 }
 
 } // namespace duckdb

@@ -9,7 +9,7 @@
 #include "duckdb/common/error_data.hpp"
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/vector_operations/generic_executor.hpp"
-#include "duckdb/main/extension_util.hpp"
+#include "duckdb/main/extension/extension_loader.hpp"
 
 namespace duckdb {
 
@@ -182,29 +182,29 @@ struct GeometryCasts {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
+	static void Register(ExtensionLoader &loader) {
 		const auto wkb_type = GeoTypes::WKB_BLOB();
 		const auto geom_type = GeoTypes::GEOMETRY();
 
 		// VARCHAR -> Geometry is explicitly castable
-		ExtensionUtil::RegisterCastFunction(db, geom_type, LogicalType::VARCHAR, BoundCastInfo(ToVarcharCast), 1);
+		loader.RegisterCastFunction(geom_type, LogicalType::VARCHAR, BoundCastInfo(ToVarcharCast), 1);
 
 		// Geometry -> VARCHAR is implicitly castable
-		ExtensionUtil::RegisterCastFunction(db, LogicalType::VARCHAR, geom_type,
+		loader.RegisterCastFunction(LogicalType::VARCHAR, geom_type,
 		                                    BoundCastInfo(FromVarcharCast, nullptr, LocalState::InitCast));
 
 		// Geometry -> WKB is explicitly castable
-		ExtensionUtil::RegisterCastFunction(db, geom_type, wkb_type, BoundCastInfo(ToWKBCast));
+		loader.RegisterCastFunction(geom_type, wkb_type, BoundCastInfo(ToWKBCast));
 
 		// Geometry -> BLOB is explicitly castable
-		ExtensionUtil::RegisterCastFunction(db, geom_type, LogicalType::BLOB, DefaultCasts::ReinterpretCast);
+		loader.RegisterCastFunction(geom_type, LogicalType::BLOB, DefaultCasts::ReinterpretCast);
 
 		// WKB -> Geometry is explicitly castable
-		ExtensionUtil::RegisterCastFunction(db, wkb_type, geom_type,
+		loader.RegisterCastFunction(wkb_type, geom_type,
 		                                    BoundCastInfo(FromWKBCast, nullptr, LocalState::InitCast));
 
 		// WKB -> BLOB is implicitly castable
-		ExtensionUtil::RegisterCastFunction(db, wkb_type, LogicalType::BLOB, DefaultCasts::ReinterpretCast, 1);
+		loader.RegisterCastFunction(wkb_type, LogicalType::BLOB, DefaultCasts::ReinterpretCast, 1);
 	}
 };
 
@@ -292,20 +292,20 @@ struct PointCasts {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
+	static void Register(ExtensionLoader &loader) {
 		// POINT_2D -> VARCHAR
-		ExtensionUtil::RegisterCastFunction(db, GeoTypes::POINT_2D(), LogicalType::VARCHAR,
+		loader.RegisterCastFunction(GeoTypes::POINT_2D(), LogicalType::VARCHAR,
 		                                    BoundCastInfo(ToVarcharCast), 1);
 		// POINT_2D -> GEOMETRY
-		ExtensionUtil::RegisterCastFunction(db, GeoTypes::POINT_2D(), GeoTypes::GEOMETRY(),
+		loader.RegisterCastFunction(GeoTypes::POINT_2D(), GeoTypes::GEOMETRY(),
 		                                    BoundCastInfo(ToGeometryCast, nullptr, LocalState::InitCast), 1);
 		// GEOMETRY -> POINT_2D
-		ExtensionUtil::RegisterCastFunction(db, GeoTypes::GEOMETRY(), GeoTypes::POINT_2D(),
+		loader.RegisterCastFunction(GeoTypes::GEOMETRY(), GeoTypes::POINT_2D(),
 		                                    BoundCastInfo(FromGeometryCast, nullptr, LocalState::InitCast), 1);
 		// POINT_3D -> POINT_2D
-		ExtensionUtil::RegisterCastFunction(db, GeoTypes::POINT_3D(), GeoTypes::POINT_2D(), ToPoint2DCast, 1);
+		loader.RegisterCastFunction(GeoTypes::POINT_3D(), GeoTypes::POINT_2D(), ToPoint2DCast, 1);
 		// POINT_4D -> POINT_2D
-		ExtensionUtil::RegisterCastFunction(db, GeoTypes::POINT_4D(), GeoTypes::POINT_2D(), ToPoint2DCast, 1);
+		loader.RegisterCastFunction(GeoTypes::POINT_4D(), GeoTypes::POINT_2D(), ToPoint2DCast, 1);
 	}
 };
 
@@ -396,15 +396,15 @@ struct LinestringCasts {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
+	static void Register(ExtensionLoader &loader) {
 		// LINESTRING_2D -> VARCHAR
-		ExtensionUtil::RegisterCastFunction(db, GeoTypes::LINESTRING_2D(), LogicalType::VARCHAR,
+		loader.RegisterCastFunction(GeoTypes::LINESTRING_2D(), LogicalType::VARCHAR,
 		                                    BoundCastInfo(ToVarcharCast), 1);
 		// LINESTRING_2D -> GEOMETRY
-		ExtensionUtil::RegisterCastFunction(db, GeoTypes::LINESTRING_2D(), GeoTypes::GEOMETRY(),
+		loader.RegisterCastFunction(GeoTypes::LINESTRING_2D(), GeoTypes::GEOMETRY(),
 		                                    BoundCastInfo(ToGeometryCast, nullptr, LocalState::InitCast), 1);
 		// GEOMETRY -> LINESTRING_2D
-		ExtensionUtil::RegisterCastFunction(db, GeoTypes::GEOMETRY(), GeoTypes::LINESTRING_2D(),
+		loader.RegisterCastFunction(GeoTypes::GEOMETRY(), GeoTypes::LINESTRING_2D(),
 		                                    BoundCastInfo(FromGeometryCast, nullptr, LocalState::InitCast), 1);
 	}
 };
@@ -538,15 +538,15 @@ struct PolygonCasts {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
+	static void Register(ExtensionLoader &loader) {
 		// POLYGON_2D -> VARCHAR
-		ExtensionUtil::RegisterCastFunction(db, GeoTypes::POLYGON_2D(), LogicalType::VARCHAR,
+		loader.RegisterCastFunction(GeoTypes::POLYGON_2D(), LogicalType::VARCHAR,
 		                                    BoundCastInfo(ToVarcharCast), 1);
 		// POLYGON_2D -> GEOMETRY
-		ExtensionUtil::RegisterCastFunction(db, GeoTypes::POLYGON_2D(), GeoTypes::GEOMETRY(),
+		loader.RegisterCastFunction(GeoTypes::POLYGON_2D(), GeoTypes::GEOMETRY(),
 		                                    BoundCastInfo(ToGeometryCast, nullptr, LocalState::InitCast), 1);
 		// GEOMETRY -> POLYGON_2D
-		ExtensionUtil::RegisterCastFunction(db, GeoTypes::GEOMETRY(), GeoTypes::POLYGON_2D(),
+		loader.RegisterCastFunction(GeoTypes::GEOMETRY(), GeoTypes::POLYGON_2D(),
 		                                    BoundCastInfo(FromGeometryCast, nullptr, LocalState::InitCast), 1);
 	}
 };
@@ -613,17 +613,17 @@ struct BoxCasts {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
+	static void Register(ExtensionLoader &loader) {
 		// BOX_2D -> VARCHAR
-		ExtensionUtil::RegisterCastFunction(db, GeoTypes::BOX_2D(), LogicalType::VARCHAR, BoundCastInfo(ToVarcharCast),
+		loader.RegisterCastFunction(GeoTypes::BOX_2D(), LogicalType::VARCHAR, BoundCastInfo(ToVarcharCast),
 		                                    1);
 
 		// BOX_2D -> GEOMETRY
-		ExtensionUtil::RegisterCastFunction(db, GeoTypes::BOX_2D(), GeoTypes::GEOMETRY(),
+		loader.RegisterCastFunction(GeoTypes::BOX_2D(), GeoTypes::GEOMETRY(),
 		                                    BoundCastInfo(ToGeometryCast2D, nullptr, LocalState::InitCast), 1);
 
 		// BOX_2F -> GEOMETRY
-		ExtensionUtil::RegisterCastFunction(db, GeoTypes::BOX_2DF(), GeoTypes::GEOMETRY(),
+		loader.RegisterCastFunction(GeoTypes::BOX_2DF(), GeoTypes::GEOMETRY(),
 		                                    BoundCastInfo(ToGeometryCast2F, nullptr, LocalState::InitCast), 1);
 	}
 };
@@ -945,12 +945,12 @@ void CoreVectorOperations::GeometryToVarchar(Vector &source, Vector &result, idx
 // Register
 //######################################################################################################################
 
-void RegisterSpatialCastFunctions(DatabaseInstance &db) {
-	GeometryCasts::Register(db);
-	PointCasts::Register(db);
-	LinestringCasts::Register(db);
-	PolygonCasts::Register(db);
-	BoxCasts::Register(db);
+void RegisterSpatialCastFunctions(ExtensionLoader &loader) {
+	GeometryCasts::Register(loader);
+	PointCasts::Register(loader);
+	LinestringCasts::Register(loader);
+	PolygonCasts::Register(loader);
+	BoxCasts::Register(loader);
 }
 
 } // namespace duckdb

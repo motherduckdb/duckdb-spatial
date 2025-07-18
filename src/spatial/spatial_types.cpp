@@ -1,5 +1,6 @@
 #include "spatial/spatial_types.hpp"
-#include "duckdb/main/extension_util.hpp"
+
+#include "duckdb/main/extension/extension_loader.hpp"
 
 namespace duckdb {
 
@@ -80,34 +81,34 @@ LogicalType GeoTypes::CreateEnumType(const string &name, const vector<string> &m
 	return enum_type;
 }
 
-void GeoTypes::Register(DatabaseInstance &db) {
+void GeoTypes::Register(ExtensionLoader &loader) {
 
 	// POINT_2D
-	ExtensionUtil::RegisterType(db, "POINT_2D", GeoTypes::POINT_2D());
+	loader.RegisterType("POINT_2D", GeoTypes::POINT_2D());
 
 	// POINT_3D
-	ExtensionUtil::RegisterType(db, "POINT_3D", GeoTypes::POINT_3D());
+	loader.RegisterType("POINT_3D", GeoTypes::POINT_3D());
 
 	// POINT_4D
-	ExtensionUtil::RegisterType(db, "POINT_4D", GeoTypes::POINT_4D());
+	loader.RegisterType("POINT_4D", GeoTypes::POINT_4D());
 
 	// LineString2D
-	ExtensionUtil::RegisterType(db, "LINESTRING_2D", GeoTypes::LINESTRING_2D());
+	loader.RegisterType("LINESTRING_2D", GeoTypes::LINESTRING_2D());
 
 	// Polygon2D
-	ExtensionUtil::RegisterType(db, "POLYGON_2D", GeoTypes::POLYGON_2D());
+	loader.RegisterType("POLYGON_2D", GeoTypes::POLYGON_2D());
 
 	// Box2D
-	ExtensionUtil::RegisterType(db, "BOX_2D", GeoTypes::BOX_2D());
+	loader.RegisterType("BOX_2D", GeoTypes::BOX_2D());
 
 	// Box2DF
-	ExtensionUtil::RegisterType(db, "BOX_2DF", GeoTypes::BOX_2DF());
+	loader.RegisterType("BOX_2DF", GeoTypes::BOX_2DF());
 
 	// GEOMETRY
-	ExtensionUtil::RegisterType(db, "GEOMETRY", GeoTypes::GEOMETRY());
+	loader.RegisterType("GEOMETRY", GeoTypes::GEOMETRY());
 
 	// WKB_BLOB
-	ExtensionUtil::RegisterType(db, "WKB_BLOB", GeoTypes::WKB_BLOB());
+	loader.RegisterType("WKB_BLOB", GeoTypes::WKB_BLOB());
 }
 
 } // namespace duckdb

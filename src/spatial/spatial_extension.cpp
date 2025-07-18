@@ -1,5 +1,3 @@
-#define DUCKDB_EXTENSION_MAIN
-
 #include "spatial/spatial_extension.hpp"
 
 #include "duckdb.hpp"
@@ -21,36 +19,36 @@
 
 namespace duckdb {
 
-static void LoadInternal(DatabaseInstance &instance) {
+static void LoadInternal(ExtensionLoader &loader) {
 
 	// Register the types
-	GeoTypes::Register(instance);
+	GeoTypes::Register(loader);
 
-	RegisterSpatialCastFunctions(instance);
-	RegisterSpatialScalarFunctions(instance);
-	RegisterSpatialAggregateFunctions(instance);
-	RegisterSpatialTableFunctions(instance);
-	SpatialJoinOptimizer::Register(instance);
-	GeoArrow::Register(instance);
+	RegisterSpatialCastFunctions(loader);
+	RegisterSpatialScalarFunctions(loader);
+	RegisterSpatialAggregateFunctions(loader);
+	RegisterSpatialTableFunctions(loader);
+	SpatialJoinOptimizer::Register(loader.GetDatabaseInstance());
+	GeoArrow::Register(loader);
 
-	RegisterProjModule(instance);
-	RegisterGDALModule(instance);
+	RegisterProjModule(loader);
+	RegisterGDALModule(loader);
 #if SPATIAL_USE_GEOS
-	RegisterGEOSModule(instance);
+	RegisterGEOSModule(loader);
 #endif
-	RegisterOSMModule(instance);
-	RegisterShapefileModule(instance);
+	RegisterOSMModule(loader);
+	RegisterShapefileModule(loader);
 
-	RTreeModule::RegisterIndex(instance);
-	RTreeModule::RegisterIndexPragmas(instance);
-	RTreeModule::RegisterIndexScan(instance);
-	RTreeModule::RegisterIndexPlanScan(instance);
+	RTreeModule::RegisterIndex(loader.GetDatabaseInstance());
+	RTreeModule::RegisterIndexPragmas(loader);
+	RTreeModule::RegisterIndexScan(loader);
+	RTreeModule::RegisterIndexPlanScan(loader.GetDatabaseInstance());
 
-	RegisterSpatialOperatorExtension(instance);;
+	RegisterSpatialOperatorExtension(loader.GetDatabaseInstance());
 }
 
-void SpatialExtension::Load(DuckDB &db) {
-	LoadInternal(*db.instance);
+void SpatialExtension::Load(ExtensionLoader &loader) {
+	LoadInternal(loader);
 }
 
 std::string SpatialExtension::Name() {
@@ -61,15 +59,9 @@ std::string SpatialExtension::Name() {
 
 extern "C" {
 
-DUCKDB_EXTENSION_API void spatial_init(duckdb::DatabaseInstance &db) {
-	LoadInternal(db);
+DUCKDB_CPP_EXTENSION_ENTRY(spatial, loader) {
+	duckdb::LoadInternal(loader);
 }
 
-DUCKDB_EXTENSION_API const char *spatial_version() {
-	return duckdb::DuckDB::LibraryVersion();
-}
 }
 
-#ifndef DUCKDB_EXTENSION_MAIN
-#error DUCKDB_EXTENSION_MAIN not defined
-#endif

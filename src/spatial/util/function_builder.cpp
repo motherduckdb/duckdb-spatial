@@ -1,7 +1,7 @@
 #include "spatial/util/function_builder.hpp"
 
 #include "duckdb/catalog/catalog_entry/function_entry.hpp"
-#include "duckdb/main/extension_util.hpp"
+#include "duckdb/main/extension/extension_loader.hpp"
 
 #include <duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp>
 
@@ -58,9 +58,11 @@ string FunctionBuilder::RemoveIndentAndTrailingWhitespace(const char *ptr) {
 	return result;
 }
 
-void FunctionBuilder::Register(DatabaseInstance &db, const char *name, ScalarFunctionBuilder &builder) {
+void FunctionBuilder::Register(ExtensionLoader &loader, const char *name, ScalarFunctionBuilder &builder) {
 	// Register the function
-	ExtensionUtil::RegisterFunction(db, std::move(builder.set));
+	loader.RegisterFunction(std::move(builder.set));
+
+	auto &db = loader.GetDatabaseInstance();
 
 	// Also add the parameter names. We need to access the catalog entry for this.
 	auto &catalog = Catalog::GetSystemCatalog(db);
@@ -101,11 +103,12 @@ void FunctionBuilder::Register(DatabaseInstance &db, const char *name, ScalarFun
 	}
 }
 
-void FunctionBuilder::Register(DatabaseInstance &db, const char *name, AggregateFunctionBuilder &builder) {
+void FunctionBuilder::Register(ExtensionLoader &loader, const char *name, AggregateFunctionBuilder &builder) {
 	// Register the function
-	ExtensionUtil::RegisterFunction(db, std::move(builder.set));
-
+	loader.RegisterFunction(std::move(builder.set));
 	// Also add the parameter names. We need to access the catalog entry for this.
+	auto &db = loader.GetDatabaseInstance();
+
 	auto &catalog = Catalog::GetSystemCatalog(db);
 	auto transaction = CatalogTransaction::GetSystemTransaction(db);
 	auto &schema = catalog.GetSchema(transaction, DEFAULT_SCHEMA);
@@ -130,7 +133,7 @@ void FunctionBuilder::Register(DatabaseInstance &db, const char *name, Aggregate
 	}
 }
 
-void FunctionBuilder::Register(DatabaseInstance &db, const char *name, MacroFunctionBuilder &builder) {
+void FunctionBuilder::Register(ExtensionLoader &loader, const char *name, MacroFunctionBuilder &builder) {
 	// Register the function
 	vector<DefaultMacro> macros;
 	vector<FunctionDescription> descriptions;
@@ -165,11 +168,12 @@ void FunctionBuilder::Register(DatabaseInstance &db, const char *name, MacroFunc
 	const auto info = DefaultFunctionGenerator::CreateInternalMacroInfo(macro_ptr);
 	info->descriptions = descriptions;
 
-	ExtensionUtil::RegisterFunction(db, *info);
+	loader.RegisterFunction(*info);
 }
 
-void FunctionBuilder::AddTableFunctionDocs(DatabaseInstance &db, const char *name, const char *desc,
+void FunctionBuilder::AddTableFunctionDocs(ExtensionLoader &loader, const char *name, const char *desc,
                                            const char *example, const InsertionOrderPreservingMap<string> &tags) {
+	auto &db = loader.GetDatabaseInstance();
 
 	auto &catalog = Catalog::GetSystemCatalog(db);
 	auto transaction = CatalogTransaction::GetSystemTransaction(db);

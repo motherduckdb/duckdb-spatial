@@ -2,8 +2,8 @@
 
 namespace duckdb {
 
-class DatabaseInstance;
+class ExtensionLoader;
 
-void RegisterOSMModule(DatabaseInstance &db);
+void RegisterOSMModule(ExtensionLoader &loader);
 
 } // namespace duckdb

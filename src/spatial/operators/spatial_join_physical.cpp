@@ -325,10 +325,10 @@ private:
 // Physical Spatial Join Operator
 //======================================================================================================================
 
-PhysicalSpatialJoin::PhysicalSpatialJoin(LogicalOperator &op, PhysicalOperator &left,
+PhysicalSpatialJoin::PhysicalSpatialJoin(PhysicalPlan &physical_plan, LogicalOperator &op, PhysicalOperator &left,
                                          PhysicalOperator &right, unique_ptr<Expression> condition_p,
                                          JoinType join_type, idx_t estimated_cardinality)
-    : PhysicalJoin(op, PhysicalOperatorType::EXTENSION, join_type, estimated_cardinality),
+    : PhysicalJoin(physical_plan, op, PhysicalOperatorType::EXTENSION, join_type, estimated_cardinality),
       condition(std::move(condition_p)) {
 
 	children.emplace_back(left);
@@ -414,7 +414,7 @@ PhysicalSpatialJoin::PhysicalSpatialJoin(LogicalOperator &op, PhysicalOperator &
 	// Initialize the layout
 	// TODO: Align?
 	layout = make_shared_ptr<TupleDataLayout>();
-	layout->Initialize(std::move(layout_types), false);
+	layout->Initialize(std::move(layout_types), TupleDataValidityType::CAN_HAVE_NULL_VALUES);
 
 	// For right/outer joins, this is where the build side match column goes
 	if (PropagatesBuildSide(join_type)) {

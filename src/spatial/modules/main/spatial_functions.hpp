@@ -4,12 +4,12 @@
 
 namespace duckdb {
 
-class DatabaseInstance;
+class ExtensionLoader;
 
-void RegisterSpatialScalarFunctions(DatabaseInstance &db);
-void RegisterSpatialAggregateFunctions(DatabaseInstance &db);
-void RegisterSpatialCastFunctions(DatabaseInstance &db);
-void RegisterSpatialTableFunctions(DatabaseInstance &db);
+void RegisterSpatialScalarFunctions(ExtensionLoader &loader);
+void RegisterSpatialAggregateFunctions(ExtensionLoader &loader);
+void RegisterSpatialCastFunctions(ExtensionLoader &loader);
+void RegisterSpatialTableFunctions(ExtensionLoader &loader);
 
 // TODO: Move these
 class Vector;

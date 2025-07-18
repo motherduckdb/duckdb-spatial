@@ -18,12 +18,12 @@ namespace duckdb {
 //-------------------------------------------------------------
 // Physical Create RTree Index
 //-------------------------------------------------------------
-PhysicalCreateRTreeIndex::PhysicalCreateRTreeIndex(LogicalOperator &op, TableCatalogEntry &table,
+PhysicalCreateRTreeIndex::PhysicalCreateRTreeIndex(PhysicalPlan &physical_plan, LogicalOperator &op, TableCatalogEntry &table,
                                                    const vector<column_t> &column_ids, unique_ptr<CreateIndexInfo> info,
                                                    vector<unique_ptr<Expression>> unbound_expressions,
                                                    idx_t estimated_cardinality)
     // Declare this operators as a EXTENSION operator
-    : PhysicalOperator(PhysicalOperatorType::EXTENSION, op.types, estimated_cardinality),
+    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, op.types, estimated_cardinality),
       table(table.Cast<DuckTableEntry>()), info(std::move(info)), unbound_expressions(std::move(unbound_expressions)) {
 
 	// convert virtual column ids to storage column ids

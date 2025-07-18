@@ -21,24 +21,24 @@ class MacroFunctionBuilder;
 class FunctionBuilder {
 public:
 	template <class CALLBACK>
-	static void RegisterScalar(DatabaseInstance &db, const char *name, CALLBACK &&callback);
+	static void RegisterScalar(ExtensionLoader &loader, const char *name, CALLBACK &&callback);
 
 	template <class CALLBACK>
-	static void RegisterAggregate(DatabaseInstance &db, const char *name, CALLBACK &&callback);
+	static void RegisterAggregate(ExtensionLoader &loader, const char *name, CALLBACK &&callback);
 
 	template <class CALLBACK>
-	static void RegisterMacro(DatabaseInstance &db, const char *name, CALLBACK &&callback);
+	static void RegisterMacro(ExtensionLoader &loader, const char *name, CALLBACK &&callback);
 
 	// TODO:
-	static void AddTableFunctionDocs(DatabaseInstance &db, const char *name, const char *desc, const char *example,
+	static void AddTableFunctionDocs(ExtensionLoader &loader, const char *name, const char *desc, const char *example,
 	                                 const InsertionOrderPreservingMap<string> &tags);
 
 	static string RemoveIndentAndTrailingWhitespace(const char *str);
 
 private:
-	static void Register(DatabaseInstance &db, const char *name, ScalarFunctionBuilder &builder);
-	static void Register(DatabaseInstance &db, const char *name, AggregateFunctionBuilder &builder);
-	static void Register(DatabaseInstance &db, const char *name, MacroFunctionBuilder &builder);
+	static void Register(ExtensionLoader &loader, const char *name, ScalarFunctionBuilder &builder);
+	static void Register(ExtensionLoader &loader, const char *name, AggregateFunctionBuilder &builder);
+	static void Register(ExtensionLoader &loader, const char *name, MacroFunctionBuilder &builder);
 };
 
 //------------------------------------------------------------------------------
@@ -216,25 +216,25 @@ inline void AggregateFunctionBuilder::SetTag(const string &key, const string &va
 //------------------------------------------------------------------------------
 
 template <class CALLBACK>
-void FunctionBuilder::RegisterScalar(DatabaseInstance &db, const char *name, CALLBACK &&callback) {
+void FunctionBuilder::RegisterScalar(ExtensionLoader &loader, const char *name, CALLBACK &&callback) {
 	ScalarFunctionBuilder builder(name);
 	callback(builder);
 
-	Register(db, name, builder);
+	Register(loader, name, builder);
 }
 
 template <class CALLBACK>
-void FunctionBuilder::RegisterAggregate(DatabaseInstance &db, const char *name, CALLBACK &&callback) {
+void FunctionBuilder::RegisterAggregate(ExtensionLoader &loader, const char *name, CALLBACK &&callback) {
 	AggregateFunctionBuilder builder(name);
 	callback(builder);
-	Register(db, name, builder);
+	Register(loader, name, builder);
 }
 
 template <class CALLBACK>
-void FunctionBuilder::RegisterMacro(DatabaseInstance &db, const char *name, CALLBACK &&callback) {
+void FunctionBuilder::RegisterMacro(ExtensionLoader &loader, const char *name, CALLBACK &&callback) {
 	MacroFunctionBuilder builder;
 	callback(builder);
-	Register(db, name, builder);
+	Register(loader, name, builder);
 }
 
 } // namespace duckdb

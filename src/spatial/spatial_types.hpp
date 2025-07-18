@@ -5,7 +5,7 @@
 
 namespace duckdb {
 
-class DatabaseInstance;
+class ExtensionLoader;
 struct LogicalType;
 
 struct GeoTypes {
@@ -19,7 +19,7 @@ struct GeoTypes {
 	static LogicalType GEOMETRY();
 	static LogicalType WKB_BLOB();
 
-	static void Register(DatabaseInstance &db);
+	static void Register(ExtensionLoader &loader);
 
 	static LogicalType CreateEnumType(const string &name, const vector<string> &members);
 };

@@ -12,7 +12,7 @@
 #include "duckdb/common/enums/file_glob_options.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "duckdb/function/table/arrow.hpp"
-#include "duckdb/main/extension_util.hpp"
+#include "duckdb/main/extension/extension_loader.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/function/copy_function.hpp"
@@ -291,7 +291,7 @@ public:
 		}
 
 		pstatbuf->st_size = static_cast<off_t>(fs.GetFileSize(*file));
-		pstatbuf->st_mtime = fs.GetLastModifiedTime(*file);
+		pstatbuf->st_mtime = Timestamp::ToTimeT(fs.GetLastModifiedTime(*file));
 
 		auto type = file->GetType();
 		switch (type) {
@@ -1086,7 +1086,7 @@ struct ST_Read : ArrowTableFunction {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
+	static void Register(ExtensionLoader &loader) {
 		TableFunction func("ST_Read", {LogicalType::VARCHAR}, Execute, Bind, InitGlobal, InitLocal);
 
 		func.cardinality = Cardinality;
@@ -1103,14 +1103,14 @@ struct ST_Read : ArrowTableFunction {
 		func.named_parameters["sequential_layer_scan"] = LogicalType::BOOLEAN;
 		func.named_parameters["max_batch_size"] = LogicalType::INTEGER;
 		func.named_parameters["keep_wkb"] = LogicalType::BOOLEAN;
-		ExtensionUtil::RegisterFunction(db, func);
+		loader.RegisterFunction(func);
 
 		InsertionOrderPreservingMap<string> tags;
 		tags.insert("ext", "spatial");
-		FunctionBuilder::AddTableFunctionDocs(db, "ST_Read", DOCUMENTATION, EXAMPLE, tags);
+		FunctionBuilder::AddTableFunctionDocs(loader, "ST_Read", DOCUMENTATION, EXAMPLE, tags);
 
 		// Replacement scan
-		auto &config = DBConfig::GetConfig(db);
+		auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
 		config.replacement_scans.emplace_back(ReplacementScan);
 	}
 };
@@ -1329,13 +1329,13 @@ struct ST_Read_Meta {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
+	static void Register(ExtensionLoader &loader) {
 		const TableFunction func("ST_Read_Meta", {LogicalType::VARCHAR}, Execute, Bind, Init);
-		ExtensionUtil::RegisterFunction(db, MultiFileReader::CreateFunctionSet(func));
+		loader.RegisterFunction(MultiFileReader::CreateFunctionSet(func));
 
 		InsertionOrderPreservingMap<string> tags;
 		tags.insert("ext", "spatial");
-		FunctionBuilder::AddTableFunctionDocs(db, "ST_Read_Meta", DESCRIPTION, EXAMPLE, tags);
+		FunctionBuilder::AddTableFunctionDocs(loader, "ST_Read_Meta", DESCRIPTION, EXAMPLE, tags);
 	}
 };
 
@@ -1452,13 +1452,13 @@ struct ST_Drivers {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
+	static void Register(ExtensionLoader &loader) {
 		const TableFunction func("ST_Drivers", {}, Execute, Bind, Init);
-		ExtensionUtil::RegisterFunction(db, func);
+		loader.RegisterFunction(func);
 
 		InsertionOrderPreservingMap<string> tags;
 		tags.insert("ext", "spatial");
-		FunctionBuilder::AddTableFunctionDocs(db, "ST_Drivers", DESCRIPTION, EXAMPLE, tags);
+		FunctionBuilder::AddTableFunctionDocs(loader, "ST_Drivers", DESCRIPTION, EXAMPLE, tags);
 	}
 };
 
@@ -2014,7 +2014,7 @@ struct ST_Write {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
+	static void Register(ExtensionLoader &loader) {
 		CopyFunction info("GDAL");
 		info.copy_to_bind = Bind;
 		info.copy_to_initialize_local = InitLocal;
@@ -2023,7 +2023,7 @@ struct ST_Write {
 		info.copy_to_combine = Combine;
 		info.copy_to_finalize = Finalize;
 		info.extension = "gdal";
-		ExtensionUtil::RegisterFunction(db, info);
+		loader.RegisterFunction(info);
 	}
 };
 
@@ -2032,7 +2032,7 @@ struct ST_Write {
 //######################################################################################################################
 // Register Module
 //######################################################################################################################
-void RegisterGDALModule(DatabaseInstance &db) {
+void RegisterGDALModule(ExtensionLoader &loader) {
 
 	// Load GDAL (once)
 	static std::once_flag loaded;
@@ -2080,10 +2080,10 @@ void RegisterGDALModule(DatabaseInstance &db) {
 		});
 	});
 
-	ST_Read::Register(db);
-	ST_Read_Meta::Register(db);
-	ST_Drivers::Register(db);
-	ST_Write::Register(db);
+	ST_Read::Register(loader);
+	ST_Read_Meta::Register(loader);
+	ST_Drivers::Register(loader);
+	ST_Write::Register(loader);
 }
 
 } // namespace duckdb

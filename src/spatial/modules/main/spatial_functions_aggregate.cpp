@@ -139,13 +139,13 @@ static constexpr const char *DOC_ALIAS_DESCRIPTION = R"(
 //------------------------------------------------------------------------
 // Register
 //------------------------------------------------------------------------
-void RegisterSpatialAggregateFunctions(DatabaseInstance &db) {
+void RegisterSpatialAggregateFunctions(ExtensionLoader &loader) {
 
 	// TODO: Dont use geometry_t here
 	const auto agg = AggregateFunction::UnaryAggregate<ExtentAggState, string_t, string_t, ExtentAggFunction>(
 	    GeoTypes::GEOMETRY(), GeoTypes::GEOMETRY());
 
-	FunctionBuilder::RegisterAggregate(db, "ST_Extent_Agg", [&](AggregateFunctionBuilder &func) {
+	FunctionBuilder::RegisterAggregate(loader, "ST_Extent_Agg", [&](AggregateFunctionBuilder &func) {
 		func.SetFunction(agg);
 		func.SetDescription(DOC_DESCRIPTION);
 		func.SetExample(DOC_EXAMPLE);
@@ -154,7 +154,7 @@ void RegisterSpatialAggregateFunctions(DatabaseInstance &db) {
 		func.SetTag("category", "construction");
 	});
 
-	FunctionBuilder::RegisterAggregate(db, "ST_Envelope_Agg", [&](AggregateFunctionBuilder &func) {
+	FunctionBuilder::RegisterAggregate(loader, "ST_Envelope_Agg", [&](AggregateFunctionBuilder &func) {
 		func.SetFunction(agg);
 		func.SetDescription(DOC_ALIAS_DESCRIPTION);
 		func.SetExample(DOC_EXAMPLE);

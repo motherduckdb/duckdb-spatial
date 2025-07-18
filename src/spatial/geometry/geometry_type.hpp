@@ -5,7 +5,7 @@
 #include "spatial/geometry/bbox.hpp"
 #include "spatial/geometry/geometry_properties.hpp"
 #include "spatial/util/cursor.hpp"
-
+#include "duckdb/common/type_util.hpp"
 #include <spatial/util/math.hpp>
 
 namespace duckdb {
@@ -147,6 +147,12 @@ public:
 		return false;
 	}
 };
+
+
+template <>
+inline PhysicalType GetTypeId<geometry_t>() {
+	return PhysicalType::VARCHAR;
+}
 
 static_assert(sizeof(geometry_t) == sizeof(string_t), "geometry_t should be the same size as string_t");
 

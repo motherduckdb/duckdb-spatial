@@ -2,10 +2,10 @@
 
 namespace duckdb {
 
-class DatabaseInstance;
+class ExtensionLoader;
 
 struct GeoArrow {
-	static void Register(DatabaseInstance &db);
+	static void Register(ExtensionLoader &loader);
 };
 
 } // namespace duckdb

@@ -1,4 +1,4 @@
-#include "duckdb/main/extension_util.hpp"
+#include "duckdb/main/extension/extension_loader.hpp"
 #include "spatial/geometry/bbox.hpp"
 #include "spatial/modules/main/spatial_functions.hpp"
 #include "spatial/spatial_types.hpp"
@@ -120,7 +120,7 @@ struct ST_GeneratePoints {
 	//------------------------------------------------------------------------------------------------------------------
 	// Register
 	//------------------------------------------------------------------------------------------------------------------
-	static void Register(DatabaseInstance &db) {
+	static void Register(ExtensionLoader &loader) {
 		// TODO: Dont overload, make seed named parameter instead
 		TableFunctionSet set("ST_GeneratePoints");
 
@@ -133,11 +133,11 @@ struct ST_GeneratePoints {
 		// Overload with seed
 		generate_points.arguments = {GeoTypes::BOX_2D(), LogicalType::BIGINT, LogicalType::BIGINT};
 		set.AddFunction(generate_points);
-		ExtensionUtil::RegisterFunction(db, set);
+		loader.RegisterFunction(set);
 
 		InsertionOrderPreservingMap<string> tags;
 		tags.insert("ext", "spatial");
-		FunctionBuilder::AddTableFunctionDocs(db, "ST_GeneratePoints", DESCRIPTION, EXAMPLE, tags);
+		FunctionBuilder::AddTableFunctionDocs(loader, "ST_GeneratePoints", DESCRIPTION, EXAMPLE, tags);
 	}
 };
 
@@ -146,8 +146,8 @@ struct ST_GeneratePoints {
 //######################################################################################################################
 // Register
 //######################################################################################################################
-void RegisterSpatialTableFunctions(DatabaseInstance &db) {
-	ST_GeneratePoints::Register(db);
+void RegisterSpatialTableFunctions(ExtensionLoader &loader) {
+	ST_GeneratePoints::Register(loader);
 }
 
 } // namespace duckdb

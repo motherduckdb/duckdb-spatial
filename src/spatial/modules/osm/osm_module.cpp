@@ -2,7 +2,7 @@
 
 #include "duckdb/function/replacement_scan.hpp"
 #include "duckdb/main/database.hpp"
-#include "duckdb/main/extension_util.hpp"
+#include "duckdb/main/extension/extension_loader.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
@@ -893,20 +893,20 @@ static constexpr const char *DOC_EXAMPLE = R"(
 //------------------------------------------------------------------------------
 //  Register
 //------------------------------------------------------------------------------
-void RegisterOSMModule(DatabaseInstance &db) {
+void RegisterOSMModule(ExtensionLoader &loader) {
 	TableFunction read("ST_ReadOSM", {LogicalType::VARCHAR}, Execute, Bind, InitGlobal, InitLocal);
 
 	read.get_partition_data = GetPartitionData;
 	read.table_scan_progress = Progress;
 
-	ExtensionUtil::RegisterFunction(db, read);
+	loader.RegisterFunction(read);
 
 	InsertionOrderPreservingMap<string> tags;
 	tags.insert("ext", "spatial");
-	FunctionBuilder::AddTableFunctionDocs(db, "ST_ReadOSM", DOC_DESCRIPTION, DOC_EXAMPLE, tags);
+	FunctionBuilder::AddTableFunctionDocs(loader, "ST_ReadOSM", DOC_DESCRIPTION, DOC_EXAMPLE, tags);
 
 	// Replacement scan
-	auto &config = DBConfig::GetConfig(db);
+	auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
 	config.replacement_scans.emplace_back(ReadOsmPBFReplacementScan);
 }
 

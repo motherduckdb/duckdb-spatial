@@ -47,7 +47,11 @@ public:
 	//! Insert a chunk of entries into the index
 	ErrorData Insert(IndexLock &lock, DataChunk &data, Vector &row_ids) override;
 
-	IndexStorageInfo GetStorageInfo(const case_insensitive_map_t<Value> &options, const bool get_buffers) override;
+	//! Serializes RTree memory to disk and returns the index storage information.
+	IndexStorageInfo SerializeToDisk(QueryContext context, const case_insensitive_map_t<Value> &options) override;
+	//! Serializes RTree memory to the WAL and returns the index storage information.
+	IndexStorageInfo SerializeToWAL(const case_insensitive_map_t<Value> &options) override;
+
 	idx_t GetInMemorySize(IndexLock &state) override;
 
 	//! Merge another index into this index. The lock obtained from InitializeLock must be held, and the other

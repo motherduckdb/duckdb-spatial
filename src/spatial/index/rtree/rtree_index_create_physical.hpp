@@ -11,7 +11,7 @@ public:
 	static constexpr auto TYPE = PhysicalOperatorType::EXTENSION;
 
 public:
-	PhysicalCreateRTreeIndex(LogicalOperator &op, TableCatalogEntry &table, const vector<column_t> &column_ids,
+	PhysicalCreateRTreeIndex(PhysicalPlan &physical_plan, LogicalOperator &op, TableCatalogEntry &table, const vector<column_t> &column_ids,
 	                         unique_ptr<CreateIndexInfo> info, vector<unique_ptr<Expression>> unbound_expressions,
 	                         idx_t estimated_cardinality);
 

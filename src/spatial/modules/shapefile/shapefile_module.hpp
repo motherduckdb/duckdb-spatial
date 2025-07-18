@@ -2,8 +2,8 @@
 
 namespace duckdb {
 
-class DatabaseInstance;
+class ExtensionLoader;
 
-void RegisterShapefileModule(DatabaseInstance &db);
+void RegisterShapefileModule(ExtensionLoader &loader);
 
 } // namespace duckdb
