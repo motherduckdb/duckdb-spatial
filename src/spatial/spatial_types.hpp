@@ -3,12 +3,12 @@
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/helper.hpp"
+#include "duckdb/function/function.hpp"
 
 namespace duckdb {
 
 class ExtensionLoader;
 struct LogicalType;
-struct FunctionData;
 class ScalarFunction;
 class AggregateFunction;
 class ClientContext;
