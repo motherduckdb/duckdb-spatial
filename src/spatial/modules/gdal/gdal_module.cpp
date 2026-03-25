@@ -84,6 +84,7 @@ public:
 			while (bytes_left > 0) {
 				const auto bytes_read = file_handle->Read(bytes_data, bytes_left);
 				if (bytes_read == 0) {
+					is_eof = true;
 					break;
 				}
 				bytes_left -= bytes_read;
@@ -354,6 +355,12 @@ public:
 		const auto real_file_stem = StringUtil::GetFileStem(real_file_path);
 		const auto base_file_path = fs.JoinPath(StringUtil::GetFilePath(real_file_path), real_file_stem);
 		const auto glob_file_path = base_file_path + ".*";
+
+		if (fs.IsRemoteFile(base_file_path)) {
+			// Sibling file listing is expensive for remote files, so avoid it here.
+			// GDAL will fall back to a ReadDir if needed.
+			return nullptr;
+		}
 
 		CPLStringList files;
 		for (auto &file : fs.Glob(glob_file_path)) {
