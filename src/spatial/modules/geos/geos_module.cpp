@@ -2238,6 +2238,38 @@ struct ST_ShortestLine {
 	}
 };
 
+struct ST_Snap {
+    static void Execute(DataChunk &args, ExpressionState &state, Vector &result) {
+        auto &lstate = LocalState::ResetAndGet(state);
+        TernaryExecutor::Execute<string_t, string_t, double, string_t>(
+            args.data[0], args.data[1], args.data[2], result, args.size(),
+            [&](const string_t &geom_blob, const string_t &snap_to_blob, double tolerance) {
+                const auto geom = lstate.Deserialize(geom_blob);
+                const auto snap_to = lstate.Deserialize(snap_to_blob);
+                const auto snapped = geom.get_snap(snap_to, tolerance);
+                return lstate.Serialize(result, snapped);
+            });
+    }
+
+    static void Register(ExtensionLoader &loader) {
+        FunctionBuilder::RegisterScalar(loader, "ST_Snap", [](ScalarFunctionBuilder &func) {
+            func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
+                variant.AddParameter("geom", LogicalType::GEOMETRY());
+                variant.AddParameter("snap_to", LogicalType::GEOMETRY());
+                variant.AddParameter("tolerance", LogicalType::DOUBLE);
+                variant.SetReturnType(LogicalType::GEOMETRY());
+                variant.SetBind(GeoTypes::PropagateCRS);
+                variant.SetInit(LocalState::Init);
+                variant.SetFunction(Execute);
+                variant.CanThrowErrors();
+            });
+            func.SetDescription("Snaps the vertices and segments of a geometry to another geometry's vertices within the given tolerance");
+            func.SetTag("ext", "spatial");
+            func.SetTag("category", "construction");
+        });
+    }
+};
+
 struct ST_ClosestPoint {
 	static void Execute(DataChunk &args, ExpressionState &state, Vector &result) {
 		auto &lstate = LocalState::ResetAndGet(state);
@@ -3332,6 +3364,7 @@ void RegisterGEOSModule(ExtensionLoader &loader) {
 	ST_ShortestLine::Register(loader);
 	ST_Simplify::Register(loader);
 	ST_SimplifyPreserveTopology::Register(loader);
+	ST_Snap::Register(loader);
 	ST_SymDifference::Register(loader);
 	ST_Touches::Register(loader);
 	ST_Union::Register(loader);
