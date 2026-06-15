@@ -5,6 +5,16 @@
 
 namespace duckdb {
 
+class DynamicTableFilterSet;
+
+//! A target into which the spatial join pushes a bounding-box filter derived from the build-side R-tree.
+struct SpatialJoinPushdownTarget {
+	//! The dynamic table filter set of the probe-side LogicalGet to push the filter into
+	shared_ptr<DynamicTableFilterSet> dynamic_filters;
+	//! The storage column index of the probe-side geometry column
+	idx_t probe_column_index;
+};
+
 class PhysicalSpatialJoin final : public PhysicalJoin {
 public:
 	static constexpr auto TYPE = PhysicalOperatorType::EXTENSION;
@@ -12,7 +22,8 @@ public:
 public:
 	PhysicalSpatialJoin(PhysicalPlan &physical_plan, LogicalOperator &op, PhysicalOperator &left,
 	                    PhysicalOperator &right, unique_ptr<Expression> spatial_predicate, JoinType join_type,
-	                    idx_t estimated_cardinality, bool has_const_distance, double const_distance);
+	                    idx_t estimated_cardinality, bool has_const_distance, double const_distance,
+	                    vector<SpatialJoinPushdownTarget> filter_pushdown_targets);
 
 	//! The condition of the join
 	unique_ptr<Expression> condition;
@@ -35,6 +46,9 @@ public:
 	// In case this is a ST_DWithin join, we store the constant distance here
 	bool has_const_distance = false;
 	double const_distance = 0.0;
+
+	// Probe-side targets into which we push a bounding-box filter derived from the build-side R-tree
+	vector<SpatialJoinPushdownTarget> filter_pushdown_targets;
 
 public:
 	// Operator Interface

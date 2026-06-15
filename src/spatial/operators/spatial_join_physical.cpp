@@ -12,6 +12,10 @@
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/table_filter.hpp"
+#include "duckdb/planner/filter/expression_filter.hpp"
+#include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
 
 #include "spatial/util/math.hpp"
@@ -118,6 +122,12 @@ public:
 
 	uint32_t Count() const {
 		return item_count;
+	}
+
+	// The bounding box covering all items in the tree (for DWithin joins this is already expanded by
+	// the constant distance, since the per-item boxes are expanded before being pushed)
+	const Box &Bounds() const {
+		return tree_box;
 	}
 
 	// Return insertion index
@@ -396,6 +406,43 @@ static unique_ptr<Expression> GetBBOXExpression(ClientContext &context, const Lo
 	return std::move(bbox_expr);
 }
 
+// Build a constant GEOMETRY value (a rectangular polygon) covering the given box by constant-folding ST_MakeEnvelope.
+// Used to construct the bounding-box filter pushed into the probe side.
+static Value MakeEnvelopeValue(ClientContext &context, const Box2D<float> &box) {
+	auto &catalog = Catalog::GetSystemCatalog(context);
+	auto &entry = catalog.GetEntry<ScalarFunctionCatalogEntry>(context, DEFAULT_SCHEMA, "ST_MakeEnvelope");
+	auto func = entry.functions.GetFunctionByArguments(
+	    context, {LogicalType::DOUBLE, LogicalType::DOUBLE, LogicalType::DOUBLE, LogicalType::DOUBLE});
+
+	vector<unique_ptr<Expression>> children;
+	children.push_back(make_uniq<BoundConstantExpression>(Value::DOUBLE(box.min.x)));
+	children.push_back(make_uniq<BoundConstantExpression>(Value::DOUBLE(box.min.y)));
+	children.push_back(make_uniq<BoundConstantExpression>(Value::DOUBLE(box.max.x)));
+	children.push_back(make_uniq<BoundConstantExpression>(Value::DOUBLE(box.max.y)));
+
+	auto envelope_expr = make_uniq<BoundFunctionExpression>(LogicalType::GEOMETRY(), func, std::move(children), nullptr);
+
+	return ExpressionExecutor::EvaluateScalar(context, *envelope_expr);
+}
+
+// Build an `ST_Intersects_Extent(<column>, <const envelope>)` expression filter for the build-side bounding box.
+// The column is referenced as BoundReference index 0
+// - (the convention for expression filters, which are evaluated against the single filtered column).
+static unique_ptr<TableFilter> MakeBoundingBoxFilter(ClientContext &context, const Value &envelope) {
+	auto &catalog = Catalog::GetSystemCatalog(context);
+	auto &entry = catalog.GetEntry<ScalarFunctionCatalogEntry>(context, DEFAULT_SCHEMA, "ST_Intersects_Extent");
+	auto func =
+	    entry.functions.GetFunctionByArguments(context, {LogicalType::GEOMETRY(), LogicalType::GEOMETRY()});
+
+	vector<unique_ptr<Expression>> children;
+	children.push_back(make_uniq<BoundReferenceExpression>(LogicalType::GEOMETRY(), 0));
+	children.push_back(make_uniq<BoundConstantExpression>(envelope));
+
+	auto predicate = make_uniq<BoundFunctionExpression>(LogicalType::BOOLEAN, func, std::move(children), nullptr);
+
+	return make_uniq<ExpressionFilter>(std::move(predicate));
+}
+
 //======================================================================================================================
 // Physical Spatial Join Operator
 //======================================================================================================================
@@ -403,9 +450,11 @@ static unique_ptr<Expression> GetBBOXExpression(ClientContext &context, const Lo
 PhysicalSpatialJoin::PhysicalSpatialJoin(PhysicalPlan &physical_plan, LogicalOperator &op, PhysicalOperator &left,
                                          PhysicalOperator &right, unique_ptr<Expression> condition_p,
                                          JoinType join_type, idx_t estimated_cardinality, bool has_const_distance,
-                                         double const_distance)
+                                         double const_distance,
+                                         vector<SpatialJoinPushdownTarget> filter_pushdown_targets)
     : PhysicalJoin(physical_plan, op, PhysicalOperatorType::EXTENSION, join_type, estimated_cardinality),
-      condition(std::move(condition_p)), has_const_distance(has_const_distance), const_distance(const_distance) {
+      condition(std::move(condition_p)), has_const_distance(has_const_distance), const_distance(const_distance),
+      filter_pushdown_targets(std::move(filter_pushdown_targets)) {
 
 	children.emplace_back(left);
 	children.emplace_back(right);
@@ -756,6 +805,17 @@ SinkFinalizeType PhysicalSpatialJoin::Finalize(Pipeline &pipeline, Event &event,
 
 	// Build the R-Tree once we've gathered everything
 	gstate.rtree->Build();
+
+	// If we have probe-side targets, push down a bounding-box filter derived from the build-side R-tree.
+	// Every match requires the probe geometry's bbox to intersect some build box, which is contained in the R-tree's
+	// root box, so probe rows outside it can be pruned. For ST_DWithin the distance is already baked into the root box.
+	// (the per-item boxes were expanded before insertion).
+	if (!filter_pushdown_targets.empty() && gstate.rtree->Count() > 0) {
+		const auto envelope = MakeEnvelopeValue(context, gstate.rtree->Bounds());
+		for (auto &target : filter_pushdown_targets) {
+			target.dynamic_filters->PushFilter(*this, target.probe_column_index, MakeBoundingBoxFilter(context, envelope));
+		}
+	}
 
 	return SinkFinalizeType::READY;
 }
