@@ -579,6 +579,12 @@ public:
 
 unique_ptr<GlobalSinkState> PhysicalSpatialJoin::GetGlobalSinkState(ClientContext &context) const {
 
+	// Clear any filters previously pushed by this operator. The same physical operator can be executed multiple times
+	// (e.g. in a recursive CTE), and the build-side bounding box differs each time. Stale filters must be cleared.
+	for (auto &target : filter_pushdown_targets) {
+		target.dynamic_filters->ClearFilters(*this);
+	}
+
 	auto gstate = make_uniq<SpatialJoinGlobalState>();
 	gstate->collection =
 	    make_uniq<TupleDataCollection>(BufferManager::GetBufferManager(context), layout, MemoryTag::EXTENSION);
