@@ -4,10 +4,6 @@ require spatial
 # when encountering invalid geometries. Previously, the GEOS error handler was not
 # registered for aggregate function contexts, causing nullptr dereferences.
 
-# TODO: GEOS currently has some issues on latest MSVC in release mode, so diable this test for now
-# https://github.com/libgeos/geos/issues/1449
-require notwindows
-
 # ST_Union_Agg with self-intersecting (bowtie) polygons
 statement error
 SELECT ST_Union_Agg(geom) FROM (VALUES
