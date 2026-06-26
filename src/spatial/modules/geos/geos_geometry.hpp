@@ -81,6 +81,7 @@ public:
 	GeosGeometry get_intersection(const GeosGeometry &other) const;
 	GeosGeometry get_union(const GeosGeometry &other) const;
 	GeosGeometry get_shortest_line(const GeosGeometry &other) const;
+	GeosGeometry get_snap(const GeosGeometry &other, double tolerance) const;
 
 	GeosGeometry get_simplified(double tolerance) const;
 	GeosGeometry get_simplified_topo(double tolerance) const;
@@ -473,6 +474,10 @@ inline GeosGeometry GeosGeometry::get_shortest_line(const GeosGeometry &other) c
 	const auto line = GEOSNearestPoints_r(handle, geom, other.geom);
 	const auto line_geom = GEOSGeom_createLineString_r(handle, line);
 	return GeosGeometry(handle, line_geom);
+}
+
+inline GeosGeometry GeosGeometry::get_snap(const GeosGeometry &other, double tolerance) const {
+    return GeosGeometry(handle, GEOSSnap_r(handle, geom, other.geom, tolerance));
 }
 
 inline GeosGeometry GeosGeometry::get_simplified(double tolerance) const {

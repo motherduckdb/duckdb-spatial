@@ -123,6 +123,7 @@
 | [`ST_ShortestLine`](#st_shortestline) | Returns the shortest line between two geometries |
 | [`ST_Simplify`](#st_simplify) | Returns a simplified version of the geometry |
 | [`ST_SimplifyPreserveTopology`](#st_simplifypreservetopology) | Returns a simplified version of the geometry that preserves topology |
+| [`ST_Snap`](#st_snap) | Snaps the vertices and segments of a geometry to another geometry's vertices within the given tolerance |
 | [`ST_StartPoint`](#st_startpoint) | Returns the start point of a LINESTRING. |
 | [`ST_SymDifference`](#st_symdifference) | Returns a geometry that represents the portions of two geometries that do not intersect |
 | [`ST_TileEnvelope`](#st_tileenvelope) | The `ST_TileEnvelope` scalar function generates tile envelope rectangular polygons from specified zoom level and tile indices. |
@@ -2595,6 +2596,43 @@ GEOMETRY ST_SimplifyPreserveTopology (geom GEOMETRY, tolerance DOUBLE)
 #### Description
 
 Returns a simplified version of the geometry that preserves topology
+
+----
+
+### ST_Snap
+
+
+#### Signature
+
+```sql
+GEOMETRY ST_Snap (geom GEOMETRY, reference GEOMETRY, tolerance DOUBLE)
+```
+
+#### Description
+
+Snaps the vertices and segments of a geometry to another geometry's vertices within the given tolerance
+
+#### Example
+
+```sql
+-- Multipolygon snapped to linestring at 1.01x distance
+SELECT ST_AsText(ST_Snap(poly, line, ST_Distance(poly, line) * 1.01))
+FROM (SELECT
+    ST_GeomFromText('MULTIPOLYGON(((26 125,26 200,126 200,126 125,26 125),(51 150,101 150,76 175,51 150)),((151 100,151 200,176 175,151 100)))') AS poly,
+    ST_GeomFromText('LINESTRING(5 107,54 84,101 100)') AS line
+) AS foo;
+----
+MULTIPOLYGON (((26 125, 26 200, 126 200, 126 125, 101 100, 26 125), (51 150, 101 150, 76 175, 51 150)), ((151 100, 151 200, 176 175, 151 100)))
+
+-- Multipolygon snapped to linestring at 1.25x distance (more vertices snap)
+SELECT ST_AsText(ST_Snap(poly, line, ST_Distance(poly, line) * 1.25))
+FROM (SELECT
+    ST_GeomFromText('MULTIPOLYGON(((26 125,26 200,126 200,126 125,26 125),(51 150,101 150,76 175,51 150)),((151 100,151 200,176 175,151 100)))') AS poly,
+    ST_GeomFromText('LINESTRING(5 107,54 84,101 100)') AS line
+) AS foo;
+----
+MULTIPOLYGON (((5 107, 26 200, 126 200, 126 125, 101 100, 54 84, 5 107), (51 150, 101 150, 76 175, 51 150)), ((151 100, 151 200, 176 175, 151 100)))
+```
 
 ----
 
