@@ -17,6 +17,8 @@
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
 
+#include <utility>
+
 // GDAL
 #include "gdal.h"
 #include "ogr_core.h"
@@ -24,6 +26,7 @@
 #include "ogr_srs_api.h"
 #include "ogrsf_frmts.h"
 #include "cpl_string.h"
+#include "cpl_error.h"
 #include "cpl_vsi.h"
 #include "cpl_vsi_error.h"
 #include "cpl_vsi_virtual.h"
@@ -38,6 +41,86 @@ namespace duckdb {
 namespace {
 
 //======================================================================================================================
+// GDAL Error Handling
+//======================================================================================================================
+// GDAL's internals are not exception-safe: throwing a C++ exception from a CPLErrorHandler (or a VSI callback) unwinds
+// through GDAL's own C/C++ frames and leaks heap allocations that would otherwise be freed on the normal return path.
+// Instead we install a non-throwing handler that just silences GDAL's default stderr output, and inspect GDAL's
+// thread-local error state at our own call boundaries.
+
+// Map GDAL's thread-local last-error state to a DuckDB exception and throw it. Call this only once a GDAL call has
+// already reported failure through its return value. `fallback` is used when GDAL recorded no fresh failure of its own.
+// We reset GDAL's error state before throwing so a recovered/stale error can't leak onto the next call on this thread.
+
+// Parse the DuckDB message part out of a raw GDAL message (GDAL re-reports caught exceptions as CPLE_AppDefined) and
+// strip any /vsiduckdb-<uuid>/ prefix to make the error more readable when we print file paths.
+string CleanGDALMessage(const char *raw_msg) {
+	ErrorData error_data(raw_msg);
+	auto msg = error_data.RawMessage();
+	const auto path_pos = msg.find("/vsiduckdb-");
+	if (path_pos != string::npos) {
+		msg.erase(path_pos, 48);
+	}
+	return msg;
+}
+
+[[noreturn]] void ThrowGDALError(const string &fallback) {
+
+	// If GDAL didn't report a fresh error, but we still want to throw, use the fallback message on its own.
+	if (CPLGetLastErrorType() < CE_Failure) {
+		CPLErrorReset();
+		throw IOException(fallback);
+	}
+
+	const auto code = CPLGetLastErrorNo();
+
+	auto msg = CleanGDALMessage(CPLGetLastErrorMsg());
+	if (msg.empty()) {
+		msg = fallback;
+	}
+
+	// Reset GDAL's error state before throwing so a recovered/stale error can't leak onto the next call on this thread.
+	CPLErrorReset();
+
+	switch (code) {
+	case CPLE_NoWriteAccess:
+		throw PermissionException(msg);
+	case CPLE_UserInterrupt:
+		throw InterruptException();
+	case CPLE_OutOfMemory:
+		throw OutOfMemoryException(msg);
+	case CPLE_NotSupported:
+		throw NotImplementedException(msg);
+	case CPLE_AssertionFailed:
+	case CPLE_ObjectNull:
+		throw InternalException(msg);
+	case CPLE_IllegalArg:
+		throw InvalidInputException(msg);
+	case CPLE_AppDefined:
+	case CPLE_HttpResponse:
+	case CPLE_FileIO:
+	case CPLE_OpenFailed:
+	default:
+		throw IOException(msg);
+	}
+}
+
+// Run a DuckDB FileSystem operation from within a GDAL VSI callback, converting any C++ exception into a VSI error plus
+// the given error return value. Exceptions must never cross the C VSI boundary
+template <class FUNC>
+auto VSIGuard(FUNC &&func, decltype(std::declval<FUNC &>()()) error_value) -> decltype(std::declval<FUNC &>()()) {
+	try {
+		return func();
+	} catch (std::exception &ex) {
+		VSIError(VSIE_FileError, "%s", CleanGDALMessage(ex.what()).c_str());
+		return error_value;
+	} catch (...) {
+		VSIError(VSIE_FileError, "Unknown error in GDAL VSI callback");
+		return error_value;
+	}
+}
+
+//======================================================================================================================
 // GDAL FILE
 //======================================================================================================================
 class DuckDBFileHandle final : public VSIVirtualHandle {
@@ -47,33 +130,38 @@ public:
 	}
 
 	vsi_l_offset Tell() override {
-		return static_cast<vsi_l_offset>(file_handle->SeekPosition());
+		return VSIGuard([&]() -> vsi_l_offset { return static_cast<vsi_l_offset>(file_handle->SeekPosition()); },
+		                static_cast<vsi_l_offset>(-1));
 	}
 
 	int Seek(vsi_l_offset nOffset, int nWhence) override {
-		// Reset EOF flag on seek
-		is_eof = false;
+		return VSIGuard(
+		    [&]() -> int {
+			    // Reset EOF flag on seek
+			    is_eof = false;
 
-		// Use the reset function instead to allow compressed file handles to rewind
-		// even if they don't support seeking
-		if (nWhence == SEEK_SET && nOffset == 0) {
-			file_handle->Reset();
-			return 0;
-		}
+			    // Use the reset function instead to allow compressed file handles to rewind
+			    // even if they don't support seeking
+			    if (nWhence == SEEK_SET && nOffset == 0) {
+				    file_handle->Reset();
+				    return 0;
+			    }
 
-		switch (nWhence) {
-		case SEEK_SET:
-			file_handle->Seek(nOffset);
-			return 0;
-		case SEEK_CUR:
-			file_handle->Seek(file_handle->SeekPosition() + nOffset);
-			return 0;
-		case SEEK_END:
-			file_handle->Seek(file_handle->GetFileSize() + nOffset);
-			return 0;
-		default:
-			return -1;
-		}
+			    switch (nWhence) {
+			    case SEEK_SET:
+				    file_handle->Seek(nOffset);
+				    return 0;
+			    case SEEK_CUR:
+				    file_handle->Seek(file_handle->SeekPosition() + nOffset);
+				    return 0;
+			    case SEEK_END:
+				    file_handle->Seek(file_handle->GetFileSize() + nOffset);
+				    return 0;
+			    default:
+				    return -1;
+			    }
+		    },
+		    -1);
 	}
 
 	size_t Read(void *buffer, size_t size, size_t count) override {
@@ -90,18 +178,17 @@ public:
 				bytes_left -= bytes_read;
 				bytes_data += bytes_read;
 			}
-		} catch (...) {
-			if (bytes_left != 0) {
-				if (file_handle->SeekPosition() == file_handle->GetFileSize()) {
-					// Is at EOF!
-					is_eof = true;
-				}
+		} catch (std::exception &ex) {
+			// Never let the exception cross into GDAL (it is not exception-safe). A clean EOF is reported as EOF;
+			// otherwise record a VSI error and return the partial count. Note: GDAL 3.8.5 can't distinguish a short
+			// read from an error (fixed in 3.9.2), so a real error here may be observed as EOF by the caller.
+			if (file_handle->SeekPosition() == file_handle->GetFileSize()) {
+				is_eof = true;
 			} else {
-				// else, error!
-				// unfortunately, this version of GDAL cant distinguish between errors and reading less bytes
-				// its avaiable in 3.9.2, but we're stuck on 3.8.5 for now.
-				throw;
+				VSIError(VSIE_FileError, "%s", CleanGDALMessage(ex.what()).c_str());
 			}
+		} catch (...) {
+			VSIError(VSIE_FileError, "Unknown error reading file");
 		}
 
 		return count - (bytes_left / size);
@@ -115,23 +202,37 @@ public:
 		size_t written_bytes = 0;
 		try {
 			written_bytes = file_handle->Write(const_cast<void *>(buffer), size * count);
+		} catch (std::exception &ex) {
+			VSIError(VSIE_FileError, "%s", CleanGDALMessage(ex.what()).c_str());
 		} catch (...) {
-			// ignore
+			VSIError(VSIE_FileError, "Unknown error writing file");
 		}
 		return written_bytes / size;
 	}
 
 	int Flush() override {
-		file_handle->Sync();
-		return 0;
+		return VSIGuard(
+		    [&]() -> int {
+			    file_handle->Sync();
+			    return 0;
+		    },
+		    -1);
 	}
 	int Truncate(vsi_l_offset nNewSize) override {
-		file_handle->Truncate(static_cast<int64_t>(nNewSize));
-		return 0;
+		return VSIGuard(
+		    [&]() -> int {
+			    file_handle->Truncate(static_cast<int64_t>(nNewSize));
+			    return 0;
+		    },
+		    -1);
 	}
 	int Close() override {
-		file_handle->Close();
-		return 0;
+		return VSIGuard(
+		    [&]() -> int {
+			    file_handle->Close();
+			    return 0;
+		    },
+		    -1);
 	}
 
 private:
@@ -195,7 +296,8 @@ public:
 				flags |= FileFlags::FILE_FLAGS_READ;
 			}
 		} else {
-			throw InternalException("Unknown file access type");
+			VSIError(VSIE_FileError, "Unknown file access type: %s", access);
+			return nullptr;
 		}
 
 		try {
@@ -236,69 +338,73 @@ public:
 	}
 
 	int Stat(const char *gdal_file_name, VSIStatBufL *result, int n_flags) override {
-		auto real_file_path = StripPrefix(gdal_file_name);
-		auto &fs = FileSystem::GetFileSystem(context);
+		return VSIGuard(
+		    [&]() -> int {
+			    auto real_file_path = StripPrefix(gdal_file_name);
+			    auto &fs = FileSystem::GetFileSystem(context);
 
-		memset(result, 0, sizeof(VSIStatBufL));
+			    memset(result, 0, sizeof(VSIStatBufL));
 
-		if (fs.IsPipe(real_file_path)) {
-			result->st_mode = S_IFCHR;
-			return 0;
-		}
+			    if (fs.IsPipe(real_file_path)) {
+				    result->st_mode = S_IFCHR;
+				    return 0;
+			    }
 
-		if (!(fs.FileExists(real_file_path) ||
-		      (!FileSystem::IsRemoteFile(real_file_path) && fs.DirectoryExists(real_file_path)))) {
-			return -1;
-		}
+			    if (!(fs.FileExists(real_file_path) ||
+			          (!FileSystem::IsRemoteFile(real_file_path) && fs.DirectoryExists(real_file_path)))) {
+				    return -1;
+			    }
 
 #ifdef _WIN32
-		if (!FileSystem::IsRemoteFile(real_file_path) && fs.DirectoryExists(real_file_path)) {
-			result->st_mode = S_IFDIR;
-			return 0;
-		}
+			    if (!FileSystem::IsRemoteFile(real_file_path) && fs.DirectoryExists(real_file_path)) {
+				    result->st_mode = S_IFDIR;
+				    return 0;
+			    }
 #endif
 
-		FileOpenFlags flags;
-		flags |= FileFlags::FILE_FLAGS_READ;
-		flags |= FileFlags::FILE_FLAGS_NULL_IF_NOT_EXISTS;
-		flags |= FileCompressionType::AUTO_DETECT;
+			    FileOpenFlags flags;
+			    flags |= FileFlags::FILE_FLAGS_READ;
+			    flags |= FileFlags::FILE_FLAGS_NULL_IF_NOT_EXISTS;
+			    flags |= FileCompressionType::AUTO_DETECT;
 
-		const auto file = fs.OpenFile(real_file_path, flags);
-		if (!file) {
-			return -1;
-		}
+			    const auto file = fs.OpenFile(real_file_path, flags);
+			    if (!file) {
+				    return -1;
+			    }
 
-		try {
-			result->st_size = static_cast<off_t>(fs.GetFileSize(*file));
-		} catch (...) {
-		}
-		try {
-			result->st_mtime = Timestamp::ToTimeT(fs.GetLastModifiedTime(*file));
-		} catch (...) {
-		}
-		try {
-			const auto type = file->GetType();
-			switch (type) {
-			case FileType::FILE_TYPE_REGULAR:
-				result->st_mode = S_IFREG;
-				break;
-			case FileType::FILE_TYPE_DIR:
-				result->st_mode = S_IFDIR;
-				break;
-			case FileType::FILE_TYPE_CHARDEV:
-				result->st_mode = S_IFCHR;
-				break;
-			default:
-				// HTTPFS returns invalid type for everything basically.
-				if (FileSystem::IsRemoteFile(real_file_path)) {
-					result->st_mode = S_IFREG;
-				} else {
-					return -1;
-				}
-			}
-		} catch (...) {
-		}
-		return 0;
+			    try {
+				    result->st_size = static_cast<off_t>(fs.GetFileSize(*file));
+			    } catch (...) {
+			    }
+			    try {
+				    result->st_mtime = Timestamp::ToTimeT(fs.GetLastModifiedTime(*file));
+			    } catch (...) {
+			    }
+			    try {
+				    const auto type = file->GetType();
+				    switch (type) {
+				    case FileType::FILE_TYPE_REGULAR:
+					    result->st_mode = S_IFREG;
+					    break;
+				    case FileType::FILE_TYPE_DIR:
+					    result->st_mode = S_IFDIR;
+					    break;
+				    case FileType::FILE_TYPE_CHARDEV:
+					    result->st_mode = S_IFCHR;
+					    break;
+				    default:
+					    // HTTPFS returns invalid type for everything basically.
+					    if (FileSystem::IsRemoteFile(real_file_path)) {
+						    result->st_mode = S_IFREG;
+					    } else {
+						    return -1;
+					    }
+				    }
+			    } catch (...) {
+			    }
+			    return 0;
+		    },
+		    -1);
 	}
 
 	bool IsLocal(const char *gdal_file_path) override {
@@ -307,66 +413,86 @@ public:
 	}
 
 	int Mkdir(const char *pszDirname, long nMode) override {
-		auto &fs = FileSystem::GetFileSystem(context);
-		const auto dir_name = StripPrefix(pszDirname);
+		return VSIGuard(
+		    [&]() -> int {
+			    auto &fs = FileSystem::GetFileSystem(context);
+			    const auto dir_name = StripPrefix(pszDirname);
 
-		fs.CreateDirectory(dir_name);
-		return 0;
+			    fs.CreateDirectory(dir_name);
+			    return 0;
+		    },
+		    -1);
 	}
 
 	int Rmdir(const char *pszDirname) override {
-		auto &fs = FileSystem::GetFileSystem(context);
-		const auto dir_name = StripPrefix(pszDirname);
+		return VSIGuard(
+		    [&]() -> int {
+			    auto &fs = FileSystem::GetFileSystem(context);
+			    const auto dir_name = StripPrefix(pszDirname);
 
-		fs.RemoveDirectory(dir_name);
-		return 0;
+			    fs.RemoveDirectory(dir_name);
+			    return 0;
+		    },
+		    -1);
 	}
 
 	int RmdirRecursive(const char *pszDirname) override {
-		auto &fs = FileSystem::GetFileSystem(context);
-		const auto dir_name = StripPrefix(pszDirname);
+		return VSIGuard(
+		    [&]() -> int {
+			    auto &fs = FileSystem::GetFileSystem(context);
+			    const auto dir_name = StripPrefix(pszDirname);
 
-		fs.RemoveDirectory(dir_name);
-		return 0;
+			    fs.RemoveDirectory(dir_name);
+			    return 0;
+		    },
+		    -1);
 	}
 
 	char **ReadDirEx(const char *gdal_dir_name, int max_files) override {
-		auto &fs = FileSystem::GetFileSystem(context);
-		const auto dir_name = StripPrefix(gdal_dir_name);
+		return VSIGuard(
+		    [&]() -> char ** {
+			    auto &fs = FileSystem::GetFileSystem(context);
+			    const auto dir_name = StripPrefix(gdal_dir_name);
 
-		CPLStringList files;
-		auto files_count = 0;
-		fs.ListFiles(dir_name, [&](const string &file_name, bool is_dir) {
-			if (files_count >= max_files) {
-				return;
-			}
-			const auto tmp = AddPrefix(file_name);
-			files.AddString(tmp.c_str());
-			files_count++;
-		});
-		return files.StealList();
+			    CPLStringList files;
+			    auto files_count = 0;
+			    fs.ListFiles(dir_name, [&](const string &file_name, bool is_dir) {
+				    if (files_count >= max_files) {
+					    return;
+				    }
+				    const auto tmp = AddPrefix(file_name);
+				    files.AddString(tmp.c_str());
+				    files_count++;
+			    });
+			    return files.StealList();
+		    },
+		    nullptr);
 	}
 
 	char **SiblingFiles(const char *gdal_file_path) override {
-		auto &fs = FileSystem::GetFileSystem(context);
+		return VSIGuard(
+		    [&]() -> char ** {
+			    auto &fs = FileSystem::GetFileSystem(context);
 
-		const auto real_file_path = StripPrefix(gdal_file_path);
+			    const auto real_file_path = StripPrefix(gdal_file_path);
 
-		const auto real_file_stem = StringUtil::GetFileStem(real_file_path);
-		const auto base_file_path = fs.JoinPath(StringUtil::GetFilePath(real_file_path), real_file_stem);
-		const auto glob_file_path = base_file_path + ".*";
+			    const auto real_file_stem = StringUtil::GetFileStem(real_file_path);
+			    const auto base_file_path = fs.JoinPath(StringUtil::GetFilePath(real_file_path), real_file_stem);
+			    const auto glob_file_path = base_file_path + ".*";
 
-		if (fs.IsRemoteFile(base_file_path)) {
-			// Sibling file listing is expensive for remote files, so avoid it here.
-			// GDAL will fall back to a ReadDir if needed.
-			return nullptr;
-		}
+			    if (fs.IsRemoteFile(base_file_path)) {
+				    // Sibling file listing is expensive for remote files, so avoid it here.
+				    // GDAL will fall back to a ReadDir if needed.
+				    return nullptr;
+			    }
 
-		CPLStringList files;
-		for (auto &file : fs.Glob(glob_file_path)) {
-			files.AddString(AddPrefix(file.path).c_str());
-		}
-		return files.StealList();
+			    CPLStringList files;
+			    for (auto &file : fs.Glob(glob_file_path)) {
+				    files.AddString(AddPrefix(file.path).c_str());
+			    }
+			    return files.StealList();
+		    },
+		    nullptr);
 	}
 
 	int HasOptimizedReadMultiRange(const char *pszPath) override {
@@ -467,8 +593,8 @@ public:
 		// If the path is a GDAL driver-prefixed URL (e.g., "WFS:https://..."), pass it through directly
 		if (IsGDALDriverPrefixedURL(value)) {
 			if (!Settings::Get<EnableExternalAccessSetting>(context)) {
-				throw PermissionException(
-				    "Cannot open file '%s' with GDAL driver prefix: External access is disabled", value);
+				throw PermissionException("Cannot open file '%s' with GDAL driver prefix: External access is disabled",
+				                          value);
 			}
 			return value;
 		}
@@ -575,7 +701,7 @@ auto Bind(ClientContext &ctx, TableFunctionBindInput &input, vector<LogicalType>
 	                                result->dataset_drivers, result->dataset_options, result->dataset_sibling);
 
 	if (!dataset) {
-		throw IOException("Could not open GDAL dataset at: %s", result->real_file_path);
+		ThrowGDALError(StringUtil::Format("Could not open GDAL dataset at: %s", result->real_file_path));
 	}
 
 	ArrowSchema schema;
@@ -659,7 +785,7 @@ auto Bind(ClientContext &ctx, TableFunctionBindInput &input, vector<LogicalType>
 
 		// Get the arrow stream
 		if (!OGR_L_GetArrowStream(layer, &stream, result->layer_options.List())) {
-			throw IOException("Could not get GDAL Arrow stream at: %s", result->real_file_path);
+			ThrowGDALError(StringUtil::Format("Could not get GDAL Arrow stream at: %s", result->real_file_path));
 		}
 
 		// And the schema
@@ -893,13 +1019,17 @@ auto Pushdown(ClientContext &context, LogicalGet &get, FunctionData *bind_data, 
 class GlobalState final : public GlobalTableFunctionState {
 public:
 	~GlobalState() override {
+		if (stream.release) {
+			stream.release(&stream);
+		}
+
+		if (schema.release) {
+			schema.release(&schema);
+		}
+
 		if (dataset) {
 			GDALClose(dataset);
 			dataset = nullptr;
-		}
-
-		if (stream.release) {
-			stream.release(&stream);
 		}
 	}
 
@@ -907,6 +1037,7 @@ public:
 	CPLStringList layer_options;
 	OGRLayerH layer;
 	ArrowArrayStream stream;
+	ArrowSchema schema;
 	vector<unique_ptr<ArrowType>> col_types;
 	atomic<idx_t> features_read = {0};
 };
@@ -918,7 +1049,7 @@ auto InitGlobal(ClientContext &context, TableFunctionInitInput &input) -> unique
 	                                bdata.dataset_drivers, bdata.dataset_options, bdata.dataset_sibling);
 
 	if (!dataset) {
-		throw IOException("Could not open GDAL dataset at: %s", bdata.real_file_path);
+		ThrowGDALError(StringUtil::Format("Could not open GDAL dataset at: %s", bdata.real_file_path));
 	}
 
 	auto result = make_uniq<GlobalState>();
@@ -959,20 +1090,16 @@ auto InitGlobal(ClientContext &context, TableFunctionInitInput &input) -> unique
 
 	// Open the Arrow stream
 	if (!OGR_L_GetArrowStream(result->layer, &result->stream, result->layer_options.List())) {
-		GDALClose(dataset);
-		throw IOException("Could not get GDAL Arrow stream");
+		ThrowGDALError("Could not get GDAL Arrow stream");
 	}
 
-	ArrowSchema schema;
-	if (result->stream.get_schema(&result->stream, &schema) != 0) {
-		result->stream.release(&result->stream);
-		GDALClose(dataset);
+	if (result->stream.get_schema(&result->stream, &result->schema) != 0) {
 		throw IOException("Could not get GDAL Arrow schema");
 	}
 
 	// Store the column types
-	for (int64_t i = 0; i < schema.n_children; i++) {
-		auto &child_schema = *schema.children[i];
+	for (int64_t i = 0; i < result->schema.n_children; i++) {
+		auto &child_schema = *result->schema.children[i];
 		result->col_types.push_back(ArrowType::GetTypeFromSchema(context, child_schema));
 	}
 
@@ -1251,6 +1378,35 @@ public:
 	ArrowSchema schema;
 	unordered_map<idx_t, const shared_ptr<ArrowTypeExtensionData>> extension_type_cast;
 
+	BindData() : geometry_type(wkbUnknown) {
+		schema.release = nullptr;
+	}
+
+	// Move constructor
+	BindData(BindData &&other) noexcept
+	    : driver_name(std::move(other.driver_name)), layer_name(std::move(other.layer_name)),
+	      driver_options(std::move(other.driver_options)), layer_options(std::move(other.layer_options)),
+	      target_srs(std::move(other.target_srs)), always_xy(other.always_xy), geometry_type(other.geometry_type),
+	      props(std::move(other.props)), schema(other.schema),
+	      extension_type_cast(std::move(other.extension_type_cast)) {
+		other.schema.release = nullptr;
+	}
+
+	// Move assignment operator
+	BindData &operator=(BindData &&other) noexcept {
+		std::swap(driver_name, other.driver_name);
+		std::swap(layer_name, other.layer_name);
+		std::swap(driver_options, other.driver_options);
+		std::swap(layer_options, other.layer_options);
+		std::swap(target_srs, other.target_srs);
+		std::swap(always_xy, other.always_xy);
+		std::swap(geometry_type, other.geometry_type);
+		std::swap(props, other.props);
+		std::swap(schema, other.schema);
+		std::swap(extension_type_cast, other.extension_type_cast);
+		return *this;
+	}
+
 	~BindData() override {
 		if (schema.release) {
 			schema.release(&schema);
@@ -1422,21 +1578,42 @@ auto Bind(ClientContext &context, CopyFunctionBindInput &input, const vector<str
 //----------------------------------------------------------------------------------------------------------------------
 class GlobalState final : public GlobalFunctionData {
 public:
+	GlobalState() {
+		dataset = nullptr;
+		layer = nullptr;
+		srs = nullptr;
+	}
+
+	// Move constructor
+	GlobalState(GlobalState &&other) noexcept : dataset(other.dataset), layer(other.layer), srs(other.srs) {
+		other.dataset = nullptr;
+		other.layer = nullptr;
+		other.srs = nullptr;
+	}
+
+	// Move assignment operator
+	GlobalState &operator=(GlobalState &&other) noexcept {
+		std::swap(dataset, other.dataset);
+		std::swap(layer, other.layer);
+		std::swap(srs, other.srs);
+		return *this;
+	}
+
 	~GlobalState() override {
 		if (dataset) {
 			GDALClose(dataset);
 			dataset = nullptr;
 		}
 		if (srs) {
-			OSRDestroySpatialReference(srs);
+			OSRRelease(srs);
 			srs = nullptr;
 		}
 	}
 
 	mutex lock;
-	GDALDatasetH dataset = nullptr;
-	OGRLayerH layer = nullptr;
-	OGRSpatialReferenceH srs = nullptr;
+	GDALDatasetH dataset;
+	OGRLayerH layer;
+	OGRSpatialReferenceH srs;
 };
 
 auto InitGlobal(ClientContext &context, FunctionData &bdata_p, const string &real_file_path)
@@ -1455,7 +1632,7 @@ auto InitGlobal(ClientContext &context, FunctionData &bdata_p, const string &rea
 	// Create Dataset
 	result->dataset = GDALCreate(driver, gdal_file_path.c_str(), 0, 0, 0, GDT_Unknown, bdata.driver_options);
 	if (!result->dataset) {
-		throw IOException("Could not create GDAL dataset at: " + real_file_path);
+		ThrowGDALError("Could not create GDAL dataset at: " + real_file_path);
 	}
 
 	if (!bdata.target_srs.empty()) {
@@ -1496,7 +1673,7 @@ auto InitGlobal(ClientContext &context, FunctionData &bdata_p, const string &rea
 	                                       bdata.layer_options);
 
 	if (!result->layer) {
-		throw IOException("Could not create GDAL layer in dataset at: " + real_file_path);
+		ThrowGDALError("Could not create GDAL layer in dataset at: " + real_file_path);
 	}
 
 	// Create fields for all children
@@ -1522,7 +1699,7 @@ auto InitGlobal(ClientContext &context, FunctionData &bdata_p, const string &rea
 
 		// Register normal attribute
 		if (!OGR_L_CreateFieldFromArrowSchema(result->layer, child_schema, nullptr)) {
-			throw IOException("Could not create field in GDAL layer for column: " + string(child_schema->name));
+			ThrowGDALError("Could not create field in GDAL layer for column: " + string(child_schema->name));
 		}
 	}
 
@@ -1534,6 +1711,21 @@ auto InitGlobal(ClientContext &context, FunctionData &bdata_p, const string &rea
 //----------------------------------------------------------------------------------------------------------------------
 class LocalState final : public LocalFunctionData {
 public:
+	LocalState() {
+		array.release = nullptr;
+	}
+
+	// Move constructor
+	LocalState(LocalState &&other) noexcept : array(other.array) {
+		other.array.release = nullptr;
+	}
+
+	// Move assignment operator
+	LocalState &operator=(LocalState &&other) noexcept {
+		std::swap(array, other.array);
+		return *this;
+	}
+
 	~LocalState() override {
 		if (array.release) {
 			array.release(&array);
@@ -1569,8 +1761,9 @@ void Sink(ExecutionContext &context, FunctionData &bdata_p, GlobalFunctionData &
 		// Lock
 		lock_guard<mutex> guard(gstate.lock);
 
-		// Sink into GDAL
-		OGR_L_WriteArrowBatch(gstate.layer, &arrow_schema, &arrow_array, nullptr);
+		if (!OGR_L_WriteArrowBatch(gstate.layer, &arrow_schema, &arrow_array, nullptr)) {
+			ThrowGDALError("Could not write Arrow batch to GDAL layer");
+		}
 	}
 
 	// Release the array
@@ -1594,10 +1787,18 @@ void Combine(ExecutionContext &context, FunctionData &bind_data, GlobalFunctionD
 void Finalize(ClientContext &context, FunctionData &bind_data, GlobalFunctionData &gstate_p) {
 	auto &gstate = gstate_p.Cast<GlobalState>();
 
-	// Flush and close the dataset
-	GDALFlushCache(gstate.dataset);
-	GDALClose(gstate.dataset);
+	// Flush and close the dataset. If a flush fails we leave gstate.dataset set so the GlobalState destructor still
+	// closes it during unwinding.
+	if (GDALFlushCache(gstate.dataset) != CE_None) {
+		ThrowGDALError("Could not flush GDAL dataset");
+	}
+
+	// GDALClose frees the dataset even on error, so clear the handle before checking to avoid a double close.
+	const auto close_err = GDALClose(gstate.dataset);
 	gstate.dataset = nullptr;
+	if (close_err != CE_None) {
+		ThrowGDALError("Could not close GDAL dataset");
+	}
 }
 
 CopyFunctionExecutionMode Mode(bool preserve_insertion_order, bool use_batch_index) {
@@ -1822,8 +2023,7 @@ auto Bind(ClientContext &context, TableFunctionBindInput &input, vector<LogicalT
 	auto &input_val = input.inputs[0];
 	if (input_val.type().id() == LogicalTypeId::VARCHAR) {
 		auto raw_path = input_val.GetValue<string>();
-		if (StringUtil::StartsWith(raw_path, "/vsi") ||
-		    DuckDBFileSystemPrefix::IsGDALDriverPrefixedURL(raw_path)) {
+		if (StringUtil::StartsWith(raw_path, "/vsi") || DuckDBFileSystemPrefix::IsGDALDriverPrefixedURL(raw_path)) {
 			result->files.emplace_back(std::move(raw_path));
 		} else {
 			const auto mf_reader = MultiFileReader::Create(input.table_function);
@@ -2000,49 +2200,19 @@ void RegisterGDALModule(ExtensionLoader &loader) {
 		// Register all embedded drivers (dont go looking for plugins)
 		OGRRegisterAllInternal();
 
-		// Set GDAL error handler
+		// GDAL error handler. For ordinary failures we MUST NOT throw from here: GDAL is not exception-safe and an
+		// exception thrown from the handler unwinds through GDAL's own frames, leaking memory and potentially
+		// corrupting its state. Those are recorded in GDAL's thread-local state (CPLGetLastError*) and surfaced at our
+		// call boundaries via ThrowGDALError().
+		//
+		// CE_Fatal is the exception: GDAL would otherwise abort() the whole process right after the handler returns.
+		// Throwing here pre-empts that abort and lets DuckDB invalidate the database instead of hard-crashing. We
+		// accept the risk of unwinding through GDAL on a fatal error since the process was going to die regardless.
 		CPLSetErrorHandler([](CPLErr e, int code, const char *raw_msg) {
-			// DuckDB doesn't do warnings, so we only throw on errors
-			if (e != CE_Failure && e != CE_Fatal) {
-				return;
+			if (e == CE_Fatal) {
+				throw InternalException("Fatal GDAL error: " + CleanGDALMessage(raw_msg));
 			}
-
-			// GDAL Catches exceptions internally and passes them on to the handler again as CPLE_AppDefined
-			// So we don't add any extra information here or we end up with very long nested error messages.
-			// Using ErrorData we can parse the message part of DuckDB exceptions properly, and for other exceptions
-			// their error message will still be preserved as the "raw message".
-			ErrorData error_data(raw_msg);
-			auto msg = error_data.RawMessage();
-
-			// If the error contains a /vsiduckdb-<uuid>/ prefix,
-			// try to strip it off to make the errors more readable
-			auto path_pos = msg.find("/vsiduckdb-");
-			if (path_pos != string::npos) {
-				// We found a path, strip it off
-				msg.erase(path_pos, 48);
-			}
-
-			switch (code) {
-			case CPLE_NoWriteAccess:
-				throw PermissionException(msg);
-			case CPLE_UserInterrupt:
-				throw InterruptException();
-			case CPLE_OutOfMemory:
-				throw OutOfMemoryException(msg);
-			case CPLE_NotSupported:
-				throw NotImplementedException(msg);
-			case CPLE_AssertionFailed:
-			case CPLE_ObjectNull:
-				throw InternalException(msg);
-			case CPLE_IllegalArg:
-				throw InvalidInputException(msg);
-			case CPLE_AppDefined:
-			case CPLE_HttpResponse:
-			case CPLE_FileIO:
-			case CPLE_OpenFailed:
-			default:
-				throw IOException(msg);
-			}
+			// Otherwise a no-op: the error is captured in GDAL's thread-local state and surfaced at the boundary.
 		});
 	});
 
