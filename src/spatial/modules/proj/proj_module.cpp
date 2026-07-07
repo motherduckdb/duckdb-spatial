@@ -113,13 +113,17 @@ void ProjModule::RegisterVFS(ExtensionLoader &loader) {
 		sqlite3 *sdb = nullptr;
 		const auto sok = sqlite3_open_v2(path.c_str(), &sdb, SQLITE_OPEN_READONLY, "memvfs");
 		if (sok != SQLITE_OK) {
+			sqlite3_close_v2(sdb);
 			throw InternalException("Could not open sqlite3 memvfs database");
 		}
 
 		const auto ok = proj_context_set_database_path(nullptr, path.c_str(), nullptr, nullptr);
 		if (!ok) {
+			sqlite3_close_v2(sdb);
 			throw InternalException("Could not set proj.db path");
 		}
+
+		sqlite3_close_v2(sdb);
 	});
 }
 
@@ -1698,6 +1702,7 @@ bool IdentifyProjCRS(const char *crs, string &auth_name, string &auth_code) {
 	auto n_candidates = proj_list_get_count(candidates);
 	if (n_candidates == 0) {
 		proj_list_destroy(candidates);
+		proj_int_list_destroy(confidence);
 		proj_destroy(pj);
 		proj_context_destroy(ctx);
 		return false;
@@ -1707,6 +1712,7 @@ bool IdentifyProjCRS(const char *crs, string &auth_name, string &auth_code) {
 	auto candidate = proj_list_get(ctx, candidates, 0);
 	if (!candidate) {
 		proj_list_destroy(candidates);
+		proj_int_list_destroy(confidence);
 		proj_destroy(pj);
 		proj_context_destroy(ctx);
 		return false;
@@ -1715,7 +1721,9 @@ bool IdentifyProjCRS(const char *crs, string &auth_name, string &auth_code) {
 	if (confidence[0] < 70) {
 		// The confidence is too low, so we consider it a failed identification
 		proj_list_destroy(candidates);
+		proj_int_list_destroy(confidence);
 		proj_destroy(pj);
+		proj_destroy(candidate);
 		proj_context_destroy(ctx);
 		return false;
 	}
@@ -1725,7 +1733,9 @@ bool IdentifyProjCRS(const char *crs, string &auth_name, string &auth_code) {
 
 	if (!proj_auth_name || !proj_auth_code) {
 		proj_list_destroy(candidates);
+		proj_int_list_destroy(confidence);
 		proj_destroy(pj);
+		proj_destroy(candidate);
 		proj_context_destroy(ctx);
 		return false;
 	}
@@ -1734,7 +1744,9 @@ bool IdentifyProjCRS(const char *crs, string &auth_name, string &auth_code) {
 	auth_code = proj_auth_code;
 
 	proj_list_destroy(candidates);
+	proj_int_list_destroy(confidence);
 	proj_destroy(pj);
+	proj_destroy(candidate);
 	proj_context_destroy(ctx);
 
 	return true;
