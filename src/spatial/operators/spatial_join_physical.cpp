@@ -459,6 +459,11 @@ PhysicalSpatialJoin::PhysicalSpatialJoin(PhysicalPlan &physical_plan, LogicalOpe
 	children.emplace_back(left);
 	children.emplace_back(right);
 
+	// Disable operator caching: our output usually references large geometry blobs (zero-copy string_t's into the
+	// build-side collection), and the caching wrapper would deep-copy them into its cache chunk. With low match rates
+	// (= small output chunks) every chunk gets cached, accumulating gigabytes of copied blobs per thread.
+	caching_supported = false;
+
 	auto &func = condition->Cast<BoundFunctionExpression>();
 
 	// Extract the probe side and build side join keys

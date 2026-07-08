@@ -132,6 +132,7 @@ public:
 
 			UnaryExecutor::Execute<string_t, RETURN_TYPE>(
 			    probe_vec, result, args.size(), [&](const string_t &probe_blob) {
+			    	lstate.GetArena().Reset();
 				    const auto probe_geom = lstate.Deserialize(probe_blob);
 				    return IMPL::ExecutePredicatePrepared(const_prep, probe_geom);
 			    });
@@ -139,6 +140,7 @@ public:
 			// Both are non-const, just execute normally
 			BinaryExecutor::Execute<string_t, string_t, RETURN_TYPE>(
 			    lhs_vec, rhs_vec, result, args.size(), [&](const string_t &lhs_blob, const string_t &rhs_blob) {
+			    	lstate.GetArena().Reset();
 				    const auto lhs = lstate.Deserialize(lhs_blob);
 				    const auto rhs = lstate.Deserialize(rhs_blob);
 				    return IMPL::ExecutePredicateNormal(lhs, rhs);
@@ -178,6 +180,7 @@ public:
 			const auto lhs_prep = lhs_geom.get_prepared();
 
 			UnaryExecutor::Execute<string_t, RETURN_TYPE>(rhs_vec, result, args.size(), [&](const string_t &rhs_blob) {
+				lstate.GetArena().Reset();
 				const auto rhs_geom = lstate.Deserialize(rhs_blob);
 				return IMPL::ExecutePredicatePrepared(lhs_prep, rhs_geom);
 			});
@@ -185,6 +188,7 @@ public:
 			// Both are non-const, just execute normally
 			BinaryExecutor::Execute<string_t, string_t, RETURN_TYPE>(
 			    lhs_vec, rhs_vec, result, args.size(), [&](const string_t &lhs_blob, const string_t &rhs_blob) {
+				    lstate.GetArena().Reset();
 				    const auto lhs = lstate.Deserialize(lhs_blob);
 				    const auto rhs = lstate.Deserialize(rhs_blob);
 				    return IMPL::ExecutePredicateNormal(lhs, rhs);
