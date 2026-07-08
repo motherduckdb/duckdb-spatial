@@ -169,6 +169,21 @@ unique_ptr<NodeStatistics> RTreeIndexScanCardinality(ClientContext &context, con
 }
 
 //-------------------------------------------------------------------------
+// Virtual Columns
+//-------------------------------------------------------------------------
+static virtual_column_map_t RTreeIndexScanGetVirtualColumns(ClientContext &context,
+                                                            optional_ptr<FunctionData> bind_data_p) {
+	auto &bind_data = bind_data_p->Cast<RTreeIndexScanBindData>();
+	return bind_data.table.GetVirtualColumns();
+}
+
+static vector<column_t> RTreeIndexScanGetRowIdColumns(ClientContext &context, optional_ptr<FunctionData> bind_data) {
+	vector<column_t> result;
+	result.emplace_back(COLUMN_IDENTIFIER_ROW_ID);
+	return result;
+}
+
+//-------------------------------------------------------------------------
 // ToString
 //-------------------------------------------------------------------------
 static InsertionOrderPreservingMap<string> RTreeIndexScanToString(TableFunctionToStringInput &input) {
@@ -261,6 +276,8 @@ TableFunction RTreeIndexScanFunction::GetFunction() {
 	func.get_bind_info = RTreeIndexScanBindInfo;
 	func.serialize = RTreeScanSerialize;
 	func.deserialize = RTreeScanDeserialize;
+	func.get_virtual_columns = RTreeIndexScanGetVirtualColumns;
+	func.get_row_id_columns = RTreeIndexScanGetRowIdColumns;
 
 	return func;
 }
