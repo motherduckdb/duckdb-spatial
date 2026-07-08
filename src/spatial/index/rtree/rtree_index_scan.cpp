@@ -1,13 +1,20 @@
 #include "spatial/index/rtree/rtree_module.hpp"
 #include "spatial/index/rtree/rtree_index.hpp"
 #include "spatial/index/rtree/rtree_index_scan.hpp"
+#include "spatial/spatial_types.hpp"
 
 #include "duckdb/catalog/catalog_entry/duck_table_entry.hpp"
+#include "duckdb/catalog/catalog_entry/scalar_function_catalog_entry.hpp"
 #include "duckdb/catalog/dependency_list.hpp"
 #include "duckdb/common/mutex.hpp"
+#include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/function/function_set.hpp"
 #include "duckdb/optimizer/matcher/expression_matcher.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
+#include "duckdb/planner/filter/conjunction_filter.hpp"
+#include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/storage/table/scan_state.hpp"
 #include "duckdb/transaction/duck_transaction.hpp"
@@ -27,6 +34,12 @@ BindInfo RTreeIndexScanBindInfo(const optional_ptr<FunctionData> bind_data_p) {
 // Global State
 //-------------------------------------------------------------------------
 struct RTreeIndexScanGlobalState final : public GlobalTableFunctionState {
+	//! How to actually produce the rows. INDEX_SCAN fetches row ids matching the query bounds from the index,
+	//! TABLE_SCAN falls back to a regular parallel table scan (used when deferred bounds turn out to be missing
+	//! or not selective enough to make random fetches worthwhile).
+	enum class ScanMode { INDEX_SCAN, TABLE_SCAN };
+	ScanMode mode = ScanMode::INDEX_SCAN;
+
 	//! The maximum number of threads for this scan
 	idx_t max_threads = 1;
 
@@ -45,6 +58,9 @@ struct RTreeIndexScanGlobalState final : public GlobalTableFunctionState {
 	//! Whether a thread has been assigned to scan the transaction-local storage
 	bool local_storage_scan_assigned = false;
 
+	//! The parallel scan state for TABLE_SCAN mode (also covers the transaction-local storage)
+	ParallelTableScanState table_scan_state;
+
 	idx_t MaxThreads() const override {
 		return max_threads;
 	}
@@ -53,12 +69,87 @@ struct RTreeIndexScanGlobalState final : public GlobalTableFunctionState {
 	}
 };
 
+//-------------------------------------------------------------------------
+// Deferred bounds resolution
+//-------------------------------------------------------------------------
+static bool TryGetBoundsFromValue(ClientContext &context, const Value &value, RTreeBounds &bounds) {
+	// Evaluate ST_Extent_Approx on the constant geometry to get its bounding box
+	auto &catalog = Catalog::GetSystemCatalog(context);
+	auto &entry = catalog.GetEntry<ScalarFunctionCatalogEntry>(context, DEFAULT_SCHEMA, "ST_Extent_Approx");
+	auto func = entry.functions.GetFunctionByArguments(context, {value.type()});
+
+	vector<unique_ptr<Expression>> children;
+	children.push_back(make_uniq<BoundConstantExpression>(value));
+	const auto bbox_expr = make_uniq<BoundFunctionExpression>(GeoTypes::BOX_2DF(), func, std::move(children), nullptr);
+
+	Value result;
+	if (!ExpressionExecutor::TryEvaluateScalar(context, *bbox_expr, result) || result.IsNull()) {
+		return false;
+	}
+	auto &parts = StructValue::GetChildren(result);
+	if (parts.size() != 4) {
+		return false;
+	}
+	bounds.min.x = parts[0].GetValue<float>();
+	bounds.min.y = parts[1].GetValue<float>();
+	bounds.max.x = parts[2].GetValue<float>();
+	bounds.max.y = parts[3].GetValue<float>();
+	return true;
+}
+
+//! Look for bounding-box filters (as pushed by the spatial join, i.e. "ST_Intersects_Extent(col, <const>)")
+//! and intersect the bounds of all constants found
+static void ExtractBoundsFromFilter(ClientContext &context, const TableFilter &filter, RTreeBounds &bounds,
+                                    bool &found) {
+	switch (filter.filter_type) {
+	case TableFilterType::EXPRESSION_FILTER: {
+		auto &expr = *filter.Cast<ExpressionFilter>().expr;
+		if (expr.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+			return;
+		}
+		auto &func = expr.Cast<BoundFunctionExpression>();
+		if (!StringUtil::CIEquals(func.function.name, "ST_Intersects_Extent") && func.function.name != "&&") {
+			return;
+		}
+		for (auto &child : func.children) {
+			if (child->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
+				continue;
+			}
+			auto &value = child->Cast<BoundConstantExpression>().value;
+			RTreeBounds child_bounds;
+			if (value.IsNull() || !TryGetBoundsFromValue(context, value, child_bounds)) {
+				continue;
+			}
+			if (!found) {
+				bounds = child_bounds;
+				found = true;
+			} else {
+				// Intersect with the bounds we already have
+				bounds.min.x = MaxValue(bounds.min.x, child_bounds.min.x);
+				bounds.min.y = MaxValue(bounds.min.y, child_bounds.min.y);
+				bounds.max.x = MinValue(bounds.max.x, child_bounds.max.x);
+				bounds.max.y = MinValue(bounds.max.y, child_bounds.max.y);
+			}
+		}
+		return;
+	}
+	case TableFilterType::CONJUNCTION_AND: {
+		for (auto &child : filter.Cast<ConjunctionAndFilter>().child_filters) {
+			ExtractBoundsFromFilter(context, *child, bounds, found);
+		}
+		return;
+	}
+	default:
+		return;
+	}
+}
+
 static unique_ptr<GlobalTableFunctionState> RTreeIndexScanInitGlobal(ClientContext &context,
                                                                      TableFunctionInitInput &input) {
 	auto &bind_data = input.bind_data->Cast<RTreeIndexScanBindData>();
 	auto result = make_uniq<RTreeIndexScanGlobalState>();
 
-	// While the index itself is scanned by one thread at a time, fetching the rows can happen in parallel
+	// Both the parallel fetch of the index scan and the fallback table scan parallelize over the storage
 	result->max_threads = bind_data.table.GetStorage().MaxThreads(context);
 
 	// Figure out the storage column ids
@@ -71,8 +162,47 @@ static unique_ptr<GlobalTableFunctionState> RTreeIndexScanInitGlobal(ClientConte
 		result->column_ids.emplace_back(col_id);
 	}
 
-	// Initialize the scan state for the index
-	result->index_state = bind_data.index.Cast<RTreeIndex>().InitializeScan(bind_data.bbox);
+	// Resolve the query bounds
+	auto query_bounds = bind_data.bbox;
+	if (bind_data.deferred_bounds) {
+		// The bounds were not known at plan time: try to resolve them from a bounding-box filter pushed into this
+		// scan at runtime (e.g. by a spatial join build side).
+		RTreeBounds filter_bounds;
+		bool found = false;
+		if (input.filters) {
+			const auto &indexed_columns = bind_data.index.GetColumnIds();
+			for (auto &entry : input.filters->filters) {
+				// Only consider filters on the indexed column (the filter keys index into the scanned columns)
+				if (entry.first >= input.column_ids.size() ||
+				    input.column_ids[entry.first] != indexed_columns[0]) {
+					continue;
+				}
+				ExtractBoundsFromFilter(context, *entry.second, filter_bounds, found);
+			}
+		}
+		if (!found) {
+			// No filter arrived: fall back to a full table scan
+			result->mode = RTreeIndexScanGlobalState::ScanMode::TABLE_SCAN;
+		} else {
+			// Use the index only if the filter is estimated to be selective enough that random row fetches
+			// beat a sequential scan
+			auto &rtree_index = bind_data.index.Cast<RTreeIndex>();
+			const auto total_rows = bind_data.table.GetStorage().GetTotalRows();
+			if (rtree_index.ShouldUseIndexScan(context, filter_bounds, total_rows)) {
+				query_bounds = filter_bounds;
+			} else {
+				result->mode = RTreeIndexScanGlobalState::ScanMode::TABLE_SCAN;
+			}
+		}
+	}
+
+	if (result->mode == RTreeIndexScanGlobalState::ScanMode::INDEX_SCAN) {
+		// Initialize the scan state for the index
+		result->index_state = bind_data.index.Cast<RTreeIndex>().InitializeScan(query_bounds);
+	} else {
+		// Initialize the parallel table scan state for the fallback
+		bind_data.table.GetStorage().InitializeParallelScan(context, result->table_scan_state, input.column_indexes);
+	}
 
 	// Early out if there is nothing to project
 	if (!input.CanRemoveFilterColumns()) {
@@ -120,11 +250,19 @@ static unique_ptr<LocalTableFunctionState> RTreeIndexScanInitLocal(ExecutionCont
 	auto &g_state = global_state->Cast<RTreeIndexScanGlobalState>();
 	auto result = make_uniq<RTreeIndexScanLocalState>();
 
-	// Setup the scan state for the local storage
-	auto &local_storage = LocalStorage::Get(context.client, bind_data.table.catalog);
 	result->column_ids = g_state.column_ids;
 	result->local_storage_state.Initialize(result->column_ids, context.client, input.filters);
-	local_storage.InitializeScan(bind_data.table.GetStorage(), result->local_storage_state.local_state, input.filters);
+
+	if (g_state.mode == RTreeIndexScanGlobalState::ScanMode::INDEX_SCAN) {
+		// Setup the scan state for the local storage
+		auto &local_storage = LocalStorage::Get(context.client, bind_data.table.catalog);
+		local_storage.InitializeScan(bind_data.table.GetStorage(), result->local_storage_state.local_state,
+		                             input.filters);
+	} else {
+		// Fallback table scan: grab the first range to scan (this also covers the transaction-local storage)
+		bind_data.table.GetStorage().NextParallelScan(context.client, g_state.table_scan_state,
+		                                              result->local_storage_state);
+	}
 
 	if (g_state.CanRemoveFilterColumns()) {
 		result->all_columns.Initialize(context.client, g_state.scanned_types);
@@ -142,6 +280,33 @@ static void RTreeIndexScanExecute(ClientContext &context, TableFunctionInput &da
 	auto &l_state = data_p.local_state->Cast<RTreeIndexScanLocalState>();
 	auto &transaction = DuckTransaction::Get(context, bind_data.table.catalog);
 	auto &index = bind_data.index.Cast<RTreeIndex>();
+
+	if (g_state.mode == RTreeIndexScanGlobalState::ScanMode::TABLE_SCAN) {
+		// Fallback: a regular parallel table scan (mirroring the seq_scan table function)
+		auto &storage = bind_data.table.GetStorage();
+		while (true) {
+			if (!g_state.CanRemoveFilterColumns()) {
+				storage.Scan(transaction, output, l_state.local_storage_state);
+			} else {
+				l_state.all_columns.Reset();
+				storage.Scan(transaction, l_state.all_columns, l_state.local_storage_state);
+				output.ReferenceColumns(l_state.all_columns, g_state.projection_ids);
+			}
+			if (output.size() > 0) {
+				return;
+			}
+			const auto next =
+			    storage.NextParallelScan(context, g_state.table_scan_state, l_state.local_storage_state);
+			if (data_p.results_execution_mode == AsyncResultsExecutionMode::TASK_EXECUTOR) {
+				// We can avoid looping, and just return as appropriate
+				data_p.async_result = next == 0 ? AsyncResultType::FINISHED : AsyncResultType::HAVE_MORE_OUTPUT;
+				return;
+			}
+			if (next == 0) {
+				return;
+			}
+		}
+	}
 
 	enum class ExecutionPhase { NONE, STORAGE, LOCAL_STORAGE };
 
@@ -279,6 +444,9 @@ static InsertionOrderPreservingMap<string> RTreeIndexScanToString(TableFunctionT
 	auto &bind_data = input.bind_data->Cast<RTreeIndexScanBindData>();
 	result["Table"] = bind_data.table.name;
 	result["Index"] = bind_data.index.GetIndexName();
+	if (bind_data.deferred_bounds) {
+		result["Bounds"] = "deferred (from join filter)";
+	}
 	return result;
 }
 
@@ -299,6 +467,7 @@ static void RTreeScanSerialize(Serializer &serializer, const optional_ptr<Functi
 		ser.WriteProperty<float>(20, "max_x", bind_data.bbox.max.x);
 		ser.WriteProperty<float>(21, "max_y", bind_data.bbox.max.y);
 	});
+	serializer.WritePropertyWithDefault<bool>(105, "deferred_bounds", bind_data.deferred_bounds, false);
 }
 
 static unique_ptr<FunctionData> RTreeScanDeserialize(Deserializer &deserializer, TableFunction &function) {
@@ -322,6 +491,8 @@ static unique_ptr<FunctionData> RTreeScanDeserialize(Deserializer &deserializer,
 		bbox.max.y = ser.ReadProperty<float>(21, "max_y");
 	});
 
+	const auto deferred_bounds = deserializer.ReadPropertyWithExplicitDefault<bool>(105, "deferred_bounds", false);
+
 	auto &duck_table = catalog_entry.Cast<DuckTableEntry>();
 	auto &table_info = *catalog_entry.GetStorage().GetDataTableInfo();
 
@@ -334,7 +505,7 @@ static unique_ptr<FunctionData> RTreeScanDeserialize(Deserializer &deserializer,
 		}
 		auto &index_entry = index.Cast<RTreeIndex>();
 		if (index_entry.GetIndexName() == index_name) {
-			result = make_uniq<RTreeIndexScanBindData>(duck_table, index_entry, bbox);
+			result = make_uniq<RTreeIndexScanBindData>(duck_table, index_entry, bbox, deferred_bounds);
 			break;
 		}
 	};

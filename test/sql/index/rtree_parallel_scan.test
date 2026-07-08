@@ -4,6 +4,10 @@ require spatial
 statement ok
 PRAGMA threads=4;
 
+# This test exercises the parallel scan machinery, not the index scan cost model: always use the index
+statement ok
+SET rtree_index_scan_ratio = 1.0;
+
 statement ok
 CREATE TABLE t1 AS SELECT row_number() OVER () AS id, point::GEOMETRY AS geom
 FROM st_generatepoints({min_x: 0, min_y: 0, max_x: 1000, max_y: 1000}::BOX_2D, 50_000, 1337);
