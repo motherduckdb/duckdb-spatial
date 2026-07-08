@@ -27,18 +27,30 @@ BindInfo RTreeIndexScanBindInfo(const optional_ptr<FunctionData> bind_data_p) {
 // Global State
 //-------------------------------------------------------------------------
 struct RTreeIndexScanGlobalState final : public GlobalTableFunctionState {
-	//! The DataChunk containing all read columns.
-	//! This includes filter columns, which are immediately removed.
-	DataChunk all_columns;
+	//! The maximum number of threads for this scan
+	idx_t max_threads = 1;
+
+	//! The storage column ids to fetch
+	vector<StorageIndex> column_ids;
+	//! The types of all scanned columns, including filter columns that are removed afterwards
+	vector<LogicalType> scanned_types;
 	vector<idx_t> projection_ids;
 
-	ColumnFetchState fetch_state;
-	TableScanState local_storage_state;
-	vector<StorageIndex> column_ids;
-
-	// Index scan state
+	//! Lock protecting the shared state below
+	mutex lock;
+	//! The index scan state, shared by all threads
 	unique_ptr<IndexScanState> index_state;
-	Vector row_ids = Vector(LogicalType::ROW_TYPE);
+	//! Whether the index scan is exhausted
+	bool index_exhausted = false;
+	//! Whether a thread has been assigned to scan the transaction-local storage
+	bool local_storage_scan_assigned = false;
+
+	idx_t MaxThreads() const override {
+		return max_threads;
+	}
+	bool CanRemoveFilterColumns() const {
+		return !projection_ids.empty();
+	}
 };
 
 static unique_ptr<GlobalTableFunctionState> RTreeIndexScanInitGlobal(ClientContext &context,
@@ -46,11 +58,11 @@ static unique_ptr<GlobalTableFunctionState> RTreeIndexScanInitGlobal(ClientConte
 	auto &bind_data = input.bind_data->Cast<RTreeIndexScanBindData>();
 	auto result = make_uniq<RTreeIndexScanGlobalState>();
 
-	// Setup the scan state for the local storage
-	auto &local_storage = LocalStorage::Get(context, bind_data.table.catalog);
-	result->column_ids.reserve(input.column_ids.size());
+	// While the index itself is scanned by one thread at a time, fetching the rows can happen in parallel
+	result->max_threads = bind_data.table.GetStorage().MaxThreads(context);
 
 	// Figure out the storage column ids
+	result->column_ids.reserve(input.column_ids.size());
 	for (auto &id : input.column_ids) {
 		storage_t col_id = id;
 		if (id != DConstants::INVALID_INDEX) {
@@ -58,10 +70,6 @@ static unique_ptr<GlobalTableFunctionState> RTreeIndexScanInitGlobal(ClientConte
 		}
 		result->column_ids.emplace_back(col_id);
 	}
-
-	// Initialize the storage scan state
-	result->local_storage_state.Initialize(result->column_ids, context, input.filters);
-	local_storage.InitializeScan(bind_data.table.GetStorage(), result->local_storage_state.local_state, input.filters);
 
 	// Initialize the scan state for the index
 	result->index_state = bind_data.index.Cast<RTreeIndex>().InitializeScan(bind_data.bbox);
@@ -76,16 +84,51 @@ static unique_ptr<GlobalTableFunctionState> RTreeIndexScanInitGlobal(ClientConte
 
 	auto &duck_table = bind_data.table.Cast<DuckTableEntry>();
 	const auto &columns = duck_table.GetColumns();
-	vector<LogicalType> scanned_types;
 	for (const auto &col_idx : input.column_indexes) {
 		if (col_idx.IsRowIdColumn()) {
-			scanned_types.emplace_back(LogicalType::ROW_TYPE);
+			result->scanned_types.emplace_back(LogicalType::ROW_TYPE);
 		} else {
-			scanned_types.push_back(columns.GetColumn(col_idx.ToLogical()).Type());
+			result->scanned_types.push_back(columns.GetColumn(col_idx.ToLogical()).Type());
 		}
 	}
-	result->all_columns.Initialize(context, scanned_types);
 
+	return std::move(result);
+}
+
+//-------------------------------------------------------------------------
+// Local State
+//-------------------------------------------------------------------------
+struct RTreeIndexScanLocalState final : public LocalTableFunctionState {
+	//! The row ids scanned from the index by this thread
+	Vector row_ids = Vector(LogicalType::ROW_TYPE);
+	//! The fetch state used to fetch rows from the main storage
+	ColumnFetchState fetch_state;
+	//! Scan state for the transaction-local storage
+	TableScanState local_storage_state;
+	vector<StorageIndex> column_ids;
+	//! The DataChunk containing all read columns.
+	//! This includes filter columns, which are immediately removed.
+	DataChunk all_columns;
+	//! Whether this thread is in charge of scanning the transaction-local storage
+	bool in_charge_of_local_storage = false;
+};
+
+static unique_ptr<LocalTableFunctionState> RTreeIndexScanInitLocal(ExecutionContext &context,
+                                                                   TableFunctionInitInput &input,
+                                                                   GlobalTableFunctionState *global_state) {
+	auto &bind_data = input.bind_data->Cast<RTreeIndexScanBindData>();
+	auto &g_state = global_state->Cast<RTreeIndexScanGlobalState>();
+	auto result = make_uniq<RTreeIndexScanLocalState>();
+
+	// Setup the scan state for the local storage
+	auto &local_storage = LocalStorage::Get(context.client, bind_data.table.catalog);
+	result->column_ids = g_state.column_ids;
+	result->local_storage_state.Initialize(result->column_ids, context.client, input.filters);
+	local_storage.InitializeScan(bind_data.table.GetStorage(), result->local_storage_state.local_state, input.filters);
+
+	if (g_state.CanRemoveFilterColumns()) {
+		result->all_columns.Initialize(context.client, g_state.scanned_types);
+	}
 	return std::move(result);
 }
 
@@ -95,41 +138,85 @@ static unique_ptr<GlobalTableFunctionState> RTreeIndexScanInitGlobal(ClientConte
 static void RTreeIndexScanExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 
 	auto &bind_data = data_p.bind_data->Cast<RTreeIndexScanBindData>();
-	auto &state = data_p.global_state->Cast<RTreeIndexScanGlobalState>();
+	auto &g_state = data_p.global_state->Cast<RTreeIndexScanGlobalState>();
+	auto &l_state = data_p.local_state->Cast<RTreeIndexScanLocalState>();
 	auto &transaction = DuckTransaction::Get(context, bind_data.table.catalog);
+	auto &index = bind_data.index.Cast<RTreeIndex>();
 
-	// Scan the index for row id's
-	auto row_count = bind_data.index.Cast<RTreeIndex>().Scan(*state.index_state, state.row_ids);
+	enum class ExecutionPhase { NONE, STORAGE, LOCAL_STORAGE };
 
-	if (row_count == 0) {
-		// Index is exhausted, fetch from local storage instead.
-		// This won't be indexed, but at least we get the correct results.
-		auto &local_storage = LocalStorage::Get(transaction);
-
-		// If there are no projection ids, we can directly scan into the output
-		if (state.projection_ids.empty()) {
-			local_storage.Scan(state.local_storage_state.local_state, state.column_ids, output);
-			return;
+	// We might need to loop back if a fetched batch turns out to be empty
+	while (true) {
+		idx_t row_count = 0;
+		auto phase = ExecutionPhase::NONE;
+		{
+			// Scan the index for the next batch of row ids while holding the lock
+			lock_guard<mutex> guard(g_state.lock);
+			if (!g_state.index_exhausted) {
+				row_count = index.Scan(*g_state.index_state, l_state.row_ids);
+				if (row_count != 0) {
+					phase = ExecutionPhase::STORAGE;
+				} else {
+					g_state.index_exhausted = true;
+				}
+			}
+			if (phase == ExecutionPhase::NONE) {
+				// The index is exhausted: the first thread to get here is assigned to scan whatever is in the
+				// transaction-local storage, all other threads are done.
+				if (!g_state.local_storage_scan_assigned) {
+					g_state.local_storage_scan_assigned = true;
+					l_state.in_charge_of_local_storage = true;
+				}
+				if (l_state.in_charge_of_local_storage) {
+					phase = ExecutionPhase::LOCAL_STORAGE;
+				}
+			}
 		}
 
-		// Otherwise we need to scan into our scan chunk, and then project out the result
-		state.all_columns.Reset();
-		local_storage.Scan(state.local_storage_state.local_state, state.column_ids, state.all_columns);
-		output.ReferenceColumns(state.all_columns, state.projection_ids);
+		switch (phase) {
+		case ExecutionPhase::NONE: {
+			// No more work to pick up
+			return;
+		}
+		case ExecutionPhase::STORAGE: {
+			// Fetch the data from the main storage given the row ids, in parallel, without holding the lock
+			if (!g_state.CanRemoveFilterColumns()) {
+				bind_data.table.GetStorage().Fetch(transaction, output, g_state.column_ids, l_state.row_ids, row_count,
+				                                   l_state.fetch_state);
+			} else {
+				// We need to first fetch into our scan chunk, and then project out the result
+				l_state.all_columns.Reset();
+				bind_data.table.GetStorage().Fetch(transaction, l_state.all_columns, g_state.column_ids,
+				                                   l_state.row_ids, row_count, l_state.fetch_state);
+				output.ReferenceColumns(l_state.all_columns, g_state.projection_ids);
+			}
+			if (output.size() == 0) {
+				if (data_p.results_execution_mode == AsyncResultsExecutionMode::TASK_EXECUTOR) {
+					// We can avoid looping, and just return as appropriate
+					data_p.async_result = AsyncResultType::HAVE_MORE_OUTPUT;
+					return;
+				}
+				// The whole batch got filtered out (e.g. deleted rows), loop back and grab more work
+				continue;
+			}
+			return;
+		}
+		case ExecutionPhase::LOCAL_STORAGE: {
+			// Scan the transaction-local storage, sequentially, always on the same thread.
+			// This won't be indexed, but at least we get the correct results.
+			auto &local_storage = LocalStorage::Get(transaction);
+			if (!g_state.CanRemoveFilterColumns()) {
+				local_storage.Scan(l_state.local_storage_state.local_state, l_state.column_ids, output);
+			} else {
+				// We need to scan into our scan chunk, and then project out the result
+				l_state.all_columns.Reset();
+				local_storage.Scan(l_state.local_storage_state.local_state, l_state.column_ids, l_state.all_columns);
+				output.ReferenceColumns(l_state.all_columns, g_state.projection_ids);
+			}
+			return;
+		}
+		}
 	}
-
-	// Fetch the data from the main storage given the row ids
-	if (state.projection_ids.empty()) {
-		bind_data.table.GetStorage().Fetch(transaction, output, state.column_ids, state.row_ids, row_count,
-		                                   state.fetch_state);
-		return;
-	}
-
-	// Otherwise, we need to first fetch into our scan chunk, and then project out the result
-	state.all_columns.Reset();
-	bind_data.table.GetStorage().Fetch(transaction, state.all_columns, state.column_ids, state.row_ids, row_count,
-	                                   state.fetch_state);
-	output.ReferenceColumns(state.all_columns, state.projection_ids);
 }
 
 //-------------------------------------------------------------------------
@@ -166,6 +253,21 @@ unique_ptr<NodeStatistics> RTreeIndexScanCardinality(ClientContext &context, con
 	idx_t table_rows = storage.GetTotalRows();
 	idx_t estimated_cardinality = table_rows + local_storage.AddedRows(bind_data.table.GetStorage());
 	return make_uniq<NodeStatistics>(table_rows, estimated_cardinality);
+}
+
+//-------------------------------------------------------------------------
+// Virtual Columns
+//-------------------------------------------------------------------------
+static virtual_column_map_t RTreeIndexScanGetVirtualColumns(ClientContext &context,
+                                                            optional_ptr<FunctionData> bind_data_p) {
+	auto &bind_data = bind_data_p->Cast<RTreeIndexScanBindData>();
+	return bind_data.table.GetVirtualColumns();
+}
+
+static vector<column_t> RTreeIndexScanGetRowIdColumns(ClientContext &context, optional_ptr<FunctionData> bind_data) {
+	vector<column_t> result;
+	result.emplace_back(COLUMN_IDENTIFIER_ROW_ID);
+	return result;
 }
 
 //-------------------------------------------------------------------------
@@ -248,7 +350,7 @@ static unique_ptr<FunctionData> RTreeScanDeserialize(Deserializer &deserializer,
 //-------------------------------------------------------------------------
 TableFunction RTreeIndexScanFunction::GetFunction() {
 	TableFunction func("rtree_index_scan", {}, RTreeIndexScanExecute);
-	func.init_local = nullptr;
+	func.init_local = RTreeIndexScanInitLocal;
 	func.init_global = RTreeIndexScanInitGlobal;
 	func.statistics = RTreeIndexScanStatistics;
 	func.dependency = RTreeIndexScanDependency;
@@ -261,6 +363,8 @@ TableFunction RTreeIndexScanFunction::GetFunction() {
 	func.get_bind_info = RTreeIndexScanBindInfo;
 	func.serialize = RTreeScanSerialize;
 	func.deserialize = RTreeScanDeserialize;
+	func.get_virtual_columns = RTreeIndexScanGetVirtualColumns;
+	func.get_row_id_columns = RTreeIndexScanGetRowIdColumns;
 
 	return func;
 }
