@@ -13,6 +13,9 @@ struct SpatialJoinPushdownTarget {
 	shared_ptr<DynamicTableFilterSet> dynamic_filters;
 	//! The storage column index of the probe-side geometry column
 	idx_t probe_column_index;
+	//! The type of the probe-side geometry column. The pushed filter's column reference must use this
+	//! exact type (it may be a GEOMETRY with a CRS, which does not compare equal to plain GEOMETRY).
+	LogicalType column_type;
 };
 
 class PhysicalSpatialJoin final : public PhysicalJoin {

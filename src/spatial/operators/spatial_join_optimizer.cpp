@@ -190,6 +190,7 @@ static void SetupFilterPushdown(LogicalSpatialJoin &join) {
 			SpatialJoinPushdownTarget pushdown_target;
 			pushdown_target.dynamic_filters = get.dynamic_filters;
 			pushdown_target.probe_column_index = col.probe_column_index.column_index;
+			pushdown_target.column_type = col.storage_type;
 			join.filter_pushdown_targets.push_back(std::move(pushdown_target));
 		}
 	}

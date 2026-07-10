@@ -3,8 +3,10 @@
 #include "spatial/index/rtree/rtree_index_create_logical.hpp"
 #include "spatial/index/rtree/rtree_index_scan.hpp"
 #include "spatial/index/rtree/rtree_module.hpp"
+#include "spatial/operators/spatial_join_logical.hpp"
 #include "spatial/spatial_types.hpp"
 #include "spatial/geometry/geometry_serialization.hpp"
+#include "spatial/util/distance_extract.hpp"
 #include "spatial/util/math.hpp"
 
 #include "duckdb/catalog/catalog_entry/duck_table_entry.hpp"
@@ -26,6 +28,7 @@
 #include "duckdb/planner/operator_extension.hpp"
 #include "duckdb/storage/data_table.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
+#include "duckdb/planner/filter/optional_filter.hpp"
 #include "duckdb/main/database.hpp"
 
 namespace duckdb {
@@ -116,41 +119,67 @@ public:
 	}
 
 	static bool TryGetBoundingBox(ClientContext &context, const Expression &expr, Box2D<float> &bbox) {
-
-		// make a new box expression
-		auto &catalog = Catalog::GetSystemCatalog(context);
-		auto &entry = catalog.GetEntry<ScalarFunctionCatalogEntry>(context, DEFAULT_SCHEMA, "ST_Extent_Approx");
-		auto func = entry.functions.GetFunctionByArguments(context, {LogicalType::GEOMETRY()});
-
-		vector<unique_ptr<Expression>> children;
-		children.push_back(expr.Copy());
-
-		const auto bbox_expr =
-		    make_uniq<BoundFunctionExpression>(GeoTypes::BOX_2DF(), func, std::move(children), nullptr);
-
-		Value result;
-		if (!ExpressionExecutor::TryEvaluateScalar(context, *bbox_expr, result)) {
+		// Fold the constant geometry expression and extract the bounds from the serialized blob directly
+		Value geom;
+		if (!ExpressionExecutor::TryEvaluateScalar(context, expr, geom)) {
 			return false;
 		}
-		if (result.IsNull()) {
+		return Serde::TryGetBounds(geom, bbox);
+	}
+
+	//! Match "ST_DWithin(<indexed column>, <constant geometry>, <constant distance>)" and compute the constant's bbox
+	//! expanded by the distance.
+	//! ST_DWithin(a, b, d) implies that the bounding box of a intersects the bounding box of b widened by d, so the
+	//! expanded bbox is a valid query for the index scan.
+	static bool TryMatchDWithinPredicate(ClientContext &context, Expression &filter_expr, const Expression &index_expr,
+	                                     Box2D<float> &bbox) {
+		if (filter_expr.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+			return false;
+		}
+		auto &func = filter_expr.Cast<BoundFunctionExpression>();
+		// When the distance argument is constant, ST_DWithin's bind erases it from the children and captures it in the
+		// bind data instead, leaving just the two geometry arguments
+		if (!StringUtil::CIEquals(func.function.name, "ST_DWithin") || func.children.size() != 2) {
 			return false;
 		}
 
-		auto &parts = StructValue::GetChildren(result);
-		if (parts.size() != 4) {
+		// The distance must be a constant (captured in the bind data, like the spatial join extracts it)
+		double distance;
+		if (!ST_DWithinHelper::TryGetConstDistance(func.bind_info, distance)) {
+			return false;
+		}
+		if (!(distance >= 0)) {
+			// Negative (or NaN) distance: the predicate never matches, no point in an index scan
 			return false;
 		}
 
-		bbox.min.x = parts[0].GetValue<float>();
-		bbox.min.y = parts[1].GetValue<float>();
-		bbox.max.x = parts[2].GetValue<float>();
-		bbox.max.y = parts[3].GetValue<float>();
+		// One geometry argument must be the indexed column, the other a constant
+		auto &lhs = *func.children[0];
+		auto &rhs = *func.children[1];
+		optional_ptr<const Expression> const_geom;
+		if (lhs.Equals(index_expr) && rhs.IsFoldable()) {
+			const_geom = &rhs;
+		} else if (rhs.Equals(index_expr) && lhs.IsFoldable()) {
+			const_geom = &lhs;
+		} else {
+			return false;
+		}
+		if (!TryGetBoundingBox(context, *const_geom, bbox)) {
+			return false;
+		}
 
+		// Expand the bounding box by the distance, rounding outwards
+		const auto f_dist = MathUtil::DoubleToFloatUp(distance);
+		bbox.min.x -= f_dist;
+		bbox.min.y -= f_dist;
+		bbox.max.x += f_dist;
+		bbox.max.y += f_dist;
 		return true;
 	}
 
 	static bool TryOptimize(Binder &binder, ClientContext &context, unique_ptr<LogicalOperator> &plan,
-	                        unique_ptr<LogicalOperator> &root) {
+	                        unique_ptr<LogicalOperator> &root,
+	                        const unordered_set<DynamicTableFilterSet *> &join_filter_sets) {
 		// Look for a FILTER with a spatial predicate followed by a LOGICAL_GET table scan
 		// OR for a seq_scan with an ExpressionFilter
 		auto &op = *plan;
@@ -185,9 +214,121 @@ public:
 					return true;
 				}
 			}
-			return false;
+			// No constant predicate: check if a spatial join will push a bounding-box filter into this scan at runtime,
+			// in which case we can use a deferred-bounds index scan
+			return TryOptimizeDeferredGet(context, plan, join_filter_sets);
 		}
 		return false;
+	}
+
+	//! Replace the seq_scan function of the given LogicalGet with the RTree index scan function, pulling any
+	//! pushed-down table filters back up into a LogicalFilter (index scan does not support regular filter pushdown).
+	static void RewriteGetToIndexScan(ClientContext &context, unique_ptr<LogicalOperator> &get_ptr,
+	                                  unique_ptr<RTreeIndexScanBindData> bind_data) {
+		auto &get = get_ptr->Cast<LogicalGet>();
+		get.function = RTreeIndexScanFunction::GetFunction();
+		const auto cardinality = get.function.cardinality(context, bind_data.get());
+		get.has_estimated_cardinality = cardinality->has_estimated_cardinality;
+		get.estimated_cardinality = cardinality->estimated_cardinality;
+		get.bind_data = std::move(bind_data);
+		if (get.table_filters.filters.empty()) {
+			return;
+		}
+
+		// We need to pullup the filters from the table scan as our index scan does not support regular filter pushdown.
+		auto new_filter = make_uniq<LogicalFilter>();
+
+		// Clearing the projection ids below makes the get emit all scanned columns (including filter columns),
+		// which shifts its column bindings. Give the pulled-up filter a projection map that restores the get's old
+		// projected output, so the bindings seen by whatever parent sits above stay exactly the same.
+		if (!get.projection_ids.empty()) {
+			new_filter->projection_map = get.projection_ids;
+		}
+
+		get.projection_ids.clear();
+		get.types.clear();
+		auto &column_ids = get.GetColumnIds();
+		for (auto &entry : get.table_filters.filters) {
+			idx_t column_id = entry.first;
+			auto &type = get.returned_types[column_id];
+			bool found = false;
+			for (idx_t i = 0; i < column_ids.size(); i++) {
+				if (column_ids[i].GetPrimaryIndex() == column_id) {
+					column_id = i;
+					found = true;
+					break;
+				}
+			}
+			if (!found) {
+				throw InternalException("Could not find column id for filter");
+			}
+			auto column = make_uniq<BoundColumnRefExpression>(type, ColumnBinding(get.table_index, column_id));
+			new_filter->expressions.push_back(entry.second->ToExpression(*column));
+
+			// The pulled-up filter now does the row-level filtering. Keep the filter in the scan too,
+			// but wrapped as optional: it still prunes row groups via zonemaps (which matters when a deferred scan
+			// falls back to a full table scan), without rows being filtered twice.
+			entry.second = make_uniq<OptionalFilter>(std::move(entry.second));
+		}
+		new_filter->children.push_back(std::move(get_ptr));
+		new_filter->ResolveOperatorTypes();
+		get_ptr = std::move(new_filter);
+	}
+
+	//! Rewrite a plain seq_scan into a deferred-bounds RTree index scan, if a spatial join is going to push a bbox
+	//! filter into it at runtime and the table has an R-tree index on the probed geometry column.
+	//! The actual scan bounds (and whether to use the index at all) are decided when the scan is initialized.
+	static bool TryOptimizeDeferredGet(ClientContext &context, unique_ptr<LogicalOperator> &get_ptr,
+	                                   const unordered_set<DynamicTableFilterSet *> &join_filter_sets) {
+		auto &get = get_ptr->Cast<LogicalGet>();
+		if (get.function.name != "seq_scan") {
+			return false;
+		}
+		// Only rewrite scans that a spatial join is going to push a bounding-box filter into
+		if (!get.dynamic_filters || join_filter_sets.find(get.dynamic_filters.get()) == join_filter_sets.end()) {
+			return false;
+		}
+		auto table = get.GetTable();
+		if (!table || !table->IsDuckTable()) {
+			return false;
+		}
+		auto &duck_table = table->Cast<DuckTableEntry>();
+		auto &table_info = *table->GetStorage().GetDataTableInfo();
+		table_info.BindIndexes(context, RTreeIndex::TYPE_NAME);
+
+		unique_ptr<RTreeIndexScanBindData> bind_data = nullptr;
+		for (auto &index : table_info.GetIndexes().Indexes()) {
+			if (!index.IsBound() || RTreeIndex::TYPE_NAME != index.GetIndexType()) {
+				continue;
+			}
+			auto &index_entry = index.Cast<RTreeIndex>();
+			auto &indexed_columns = index_entry.GetColumnIds();
+			if (indexed_columns.size() != 1) {
+				continue;
+			}
+			// The index stores *physical* column ids, while the get's column ids are *logical*.
+			// These diverge when the table has generated columns, so convert before comparing.
+			const auto indexed_column =
+			    duck_table.GetColumns().PhysicalToLogical(PhysicalIndex(indexed_columns[0])).index;
+			// The indexed column must be scanned by this get, so that the pushed filter can refer to it
+			bool found = false;
+			for (auto &col : get.GetColumnIds()) {
+				if (col.GetPrimaryIndex() == indexed_column) {
+					found = true;
+					break;
+				}
+			}
+			if (!found) {
+				continue;
+			}
+			bind_data = make_uniq<RTreeIndexScanBindData>(duck_table, index_entry, RTreeBounds(), true);
+			break;
+		}
+		if (!bind_data) {
+			return false;
+		}
+		RewriteGetToIndexScan(context, get_ptr, std::move(bind_data));
+		return true;
 	}
 
 	static bool TryOptimizeGet(Binder &binder, ClientContext &context, unique_ptr<LogicalOperator> &get_ptr,
@@ -251,18 +392,27 @@ public:
 			matcher.matchers.push_back(make_uniq<ExpressionEqualityMatcher>(*index_expr));
 			matcher.matchers.push_back(make_uniq<ConstantExpressionMatcher>());
 
+			Box2D<float> bbox;
 			vector<reference<Expression>> bindings;
-			if (!matcher.Match(*filter_expr, bindings)) {
+			if (matcher.Match(*filter_expr, bindings)) {
+				// 		bindings[0] = the expression
+				// 		bindings[1] = the index expression
+				// 		bindings[2] = the constant
+
+				// Compute the bounding box
+				if (!TryGetBoundingBox(context, bindings[2], bbox)) {
+					continue;
+				}
+			} else if (!TryMatchDWithinPredicate(context, *filter_expr, *index_expr, bbox)) {
+				// Not a supported spatial predicate over the indexed column and a constant
 				continue;
 			}
 
-			// 		bindings[0] = the expression
-			// 		bindings[1] = the index expression
-			// 		bindings[2] = the constant
-
-			// Compute the bounding box
-			Box2D<float> bbox;
-			if (!TryGetBoundingBox(context, bindings[2], bbox)) {
+			// Only use the index if the predicate is estimated to be selective enough that random row fetches beat a
+			// sequential scan. If not, keep the regular table scan.
+			// (which also keeps the filters pushed down, so zonemap pruning still applies).
+			const auto total_rows = duck_table.GetStorage().GetTotalRows();
+			if (!index_entry.ShouldUseIndexScan(context, bbox, total_rows)) {
 				continue;
 			}
 
@@ -275,65 +425,38 @@ public:
 			return false;
 		}
 
-		// If there are no table filters pushed down into the get, we can just replace the get with the index scan
-		get.function = RTreeIndexScanFunction::GetFunction();
-		const auto cardinality = get.function.cardinality(context, bind_data.get());
-		get.has_estimated_cardinality = cardinality->has_estimated_cardinality;
-		get.estimated_cardinality = cardinality->estimated_cardinality;
-		get.bind_data = std::move(bind_data);
-		if (get.table_filters.filters.empty()) {
-			return true;
-		}
-
-		// Before we clear projection ids, replace projection map in the filter
-		if (!get.projection_ids.empty() && filter) {
-			for (auto &id : filter->projection_map) {
-				id = get.projection_ids[id];
-			}
-		}
-
-		get.projection_ids.clear();
-		get.types.clear();
-
-		// Otherwise, things get more complicated. We need to pullup the filters from the table scan as our index scan
-		// does not support regular filter pushdown.
-		auto new_filter = make_uniq<LogicalFilter>();
-		auto &column_ids = get.GetColumnIds();
-		for (const auto &entry : get.table_filters.filters) {
-			idx_t column_id = entry.first;
-			auto &type = get.returned_types[column_id];
-			bool found = false;
-			for (idx_t i = 0; i < column_ids.size(); i++) {
-				if (column_ids[i].GetPrimaryIndex() == column_id) {
-					column_id = i;
-					found = true;
-					break;
-				}
-			}
-			if (!found) {
-				throw InternalException("Could not find column id for filter");
-			}
-			auto column = make_uniq<BoundColumnRefExpression>(type, ColumnBinding(get.table_index, column_id));
-			new_filter->expressions.push_back(entry.second->ToExpression(*column));
-		}
-		new_filter->children.push_back(std::move(get_ptr));
-		new_filter->ResolveOperatorTypes();
-		get_ptr = std::move(new_filter);
+		RewriteGetToIndexScan(context, get_ptr, std::move(bind_data));
 		return true;
 	}
 
+	//! Collect the dynamic filter sets that spatial joins in the plan will push bounding-box filters into
+	static void CollectSpatialJoinFilterSets(LogicalOperator &op, unordered_set<DynamicTableFilterSet *> &sets) {
+		if (op.type == LogicalOperatorType::LOGICAL_EXTENSION_OPERATOR && op.GetName() == "SPATIAL_JOIN") {
+			auto &join = op.Cast<LogicalSpatialJoin>();
+			for (auto &target : join.filter_pushdown_targets) {
+				sets.insert(target.dynamic_filters.get());
+			}
+		}
+		for (auto &child : op.children) {
+			CollectSpatialJoinFilterSets(*child, sets);
+		}
+	}
+
 	static void OptimizeRecursive(OptimizerExtensionInput &input, unique_ptr<LogicalOperator> &plan,
-	                              unique_ptr<LogicalOperator> &root) {
-		if (!TryOptimize(input.optimizer.binder, input.context, plan, root)) {
+	                              unique_ptr<LogicalOperator> &root,
+	                              const unordered_set<DynamicTableFilterSet *> &join_filter_sets) {
+		if (!TryOptimize(input.optimizer.binder, input.context, plan, root, join_filter_sets)) {
 			// No match: continue with the children
 			for (auto &child : plan->children) {
-				OptimizeRecursive(input, child, root);
+				OptimizeRecursive(input, child, root, join_filter_sets);
 			}
 		}
 	}
 
 	static void Optimize(OptimizerExtensionInput &input, unique_ptr<LogicalOperator> &plan) {
-		OptimizeRecursive(input, plan, plan);
+		unordered_set<DynamicTableFilterSet *> join_filter_sets;
+		CollectSpatialJoinFilterSets(*plan, join_filter_sets);
+		OptimizeRecursive(input, plan, plan, join_filter_sets);
 	}
 };
 

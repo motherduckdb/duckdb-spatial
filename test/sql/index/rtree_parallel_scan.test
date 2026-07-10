@@ -1,8 +1,15 @@
+# name: test/sql/index/rtree_parallel_scan.test
+# group: [index]
+
 # Test that the RTREE index scan produces correct results when running with multiple threads
 require spatial
 
 statement ok
 PRAGMA threads=4;
+
+# This test exercises the parallel scan machinery, not the index scan cost model: always use the index
+statement ok
+SET rtree_index_scan_ratio = 1.0;
 
 statement ok
 CREATE TABLE t1 AS SELECT row_number() OVER () AS id, point::GEOMETRY AS geom

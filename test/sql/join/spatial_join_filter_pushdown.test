@@ -29,6 +29,14 @@ EXPLAIN ANALYZE SELECT count(*) FROM probe, build WHERE ST_Intersects(probe.geom
 ----
 analyzed_plan	<REGEX>:.*st_intersects_extent.*
 
+# The pushed filter must be OPTIONAL: it is redundant with the join (which checks every probe row
+# exactly), so it should only prune row groups via zonemaps and feed the deferred R-tree scan its
+# bounds, not be evaluated per row on top of the join's own check.
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM probe, build WHERE ST_Intersects(probe.geom, build.geom);
+----
+analyzed_plan	<REGEX>:.*optional:.*
+
 # RIGHT: probe side can still be filtered; single build row matches 16 probe rows
 query I
 SELECT count(*) FROM probe RIGHT JOIN build ON ST_Intersects(probe.geom, build.geom);

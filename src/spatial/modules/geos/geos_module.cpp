@@ -849,106 +849,105 @@ struct ST_ConvexHull {
 
 struct ST_CoverageClean {
 
-       static unique_ptr<FunctionData> Bind(ClientContext &context, ScalarFunction &bound_function,
-                                                                                vector<unique_ptr<Expression>> &arguments) {
-               // set default values for coverage_clean parameters
-               const size_t num_args = arguments.size();
-               if (num_args == 2) { // gap max width
-                    arguments.push_back(make_uniq_base<Expression, BoundConstantExpression>(Value::DOUBLE(-1)));
-               }
+	static unique_ptr<FunctionData> Bind(ClientContext &context, ScalarFunction &bound_function,
+	                                     vector<unique_ptr<Expression>> &arguments) {
+		// set default values for coverage_clean parameters
+		const size_t num_args = arguments.size();
+		if (num_args == 2) { // gap max width
+			arguments.push_back(make_uniq_base<Expression, BoundConstantExpression>(Value::DOUBLE(-1)));
+		}
 
-               if (num_args == 1) { // snapping distance, gap max width
-               		arguments.push_back(make_uniq_base<Expression, BoundConstantExpression>(Value::DOUBLE(-1)));
-                    arguments.push_back(make_uniq_base<Expression, BoundConstantExpression>(Value::DOUBLE(-1)));
-               }
+		if (num_args == 1) { // snapping distance, gap max width
+			arguments.push_back(make_uniq_base<Expression, BoundConstantExpression>(Value::DOUBLE(-1)));
+			arguments.push_back(make_uniq_base<Expression, BoundConstantExpression>(Value::DOUBLE(-1)));
+		}
 
-               return nullptr;
-       }
+		return nullptr;
+	}
 
-       static void Execute(DataChunk &args, ExpressionState &state, Vector &result) {
-               auto &lstate = LocalState::ResetAndGet(state);
-               UnifiedVectorFormat format;
+	static void Execute(DataChunk &args, ExpressionState &state, Vector &result) {
+		auto &lstate = LocalState::ResetAndGet(state);
+		UnifiedVectorFormat format;
 
-               auto &list_vec = args.data[0];
-               auto &item_vec = ListVector::GetEntry(list_vec);
-               item_vec.ToUnifiedFormat(ListVector::GetListSize(list_vec), format);
+		auto &list_vec = args.data[0];
+		auto &item_vec = ListVector::GetEntry(list_vec);
+		item_vec.ToUnifiedFormat(ListVector::GetListSize(list_vec), format);
 
-               // Collection to hold the working set of geometries
-               GeosCollection collection(lstate.GetContext());
+		// Collection to hold the working set of geometries
+		GeosCollection collection(lstate.GetContext());
 
-               TernaryExecutor::Execute<list_entry_t, double, double, string_t>(
-                   list_vec, args.data[1], args.data[2],
-                   result, args.size(), [&](const list_entry_t &list,
-                       double snapping_distance, double gap_maximum_width) {
-                           // Reset the collection
-                           collection.clear();
-                           collection.reserve(list.length);
+		TernaryExecutor::Execute<list_entry_t, double, double, string_t>(
+		    list_vec, args.data[1], args.data[2], result, args.size(),
+		    [&](const list_entry_t &list, double snapping_distance, double gap_maximum_width) {
+			    // Reset the collection
+			    collection.clear();
+			    collection.reserve(list.length);
 
-                           const auto offset = list.offset;
-                           const auto length = list.length;
+			    const auto offset = list.offset;
+			    const auto length = list.length;
 
-                           // Collect all geometries in the list into the collection
-                           for (idx_t i = offset; i < offset + length; i++) {
-                                   const auto mapped_idx = format.sel->get_index(i);
+			    // Collect all geometries in the list into the collection
+			    for (idx_t i = offset; i < offset + length; i++) {
+				    const auto mapped_idx = format.sel->get_index(i);
 
-                                   if (!format.validity.RowIsValid(mapped_idx)) {
-                                           continue;
-                                   }
+				    if (!format.validity.RowIsValid(mapped_idx)) {
+					    continue;
+				    }
 
-                                   const auto &geom_blob = UnifiedVectorFormat::GetData<string_t>(format)[mapped_idx];
+				    const auto &geom_blob = UnifiedVectorFormat::GetData<string_t>(format)[mapped_idx];
 
-                                   auto geom = lstate.Deserialize(geom_blob);
-                                   collection.add(std::move(geom));
-                           }
+				    auto geom = lstate.Deserialize(geom_blob);
+				    collection.add(std::move(geom));
+			    }
 
-                           // Now make a geometrycollection and simplify
-                           const auto geometry_col = collection.get_collection();
-                           const auto cleaned = geometry_col.get_coverage_clean(snapping_distance, gap_maximum_width);
-                           return lstate.Serialize(result, cleaned);
-                   });
-       }
+			    // Now make a geometrycollection and simplify
+			    const auto geometry_col = collection.get_collection();
+			    const auto cleaned = geometry_col.get_coverage_clean(snapping_distance, gap_maximum_width);
+			    return lstate.Serialize(result, cleaned);
+		    });
+	}
 
-       static void Register(ExtensionLoader &loader) {
-               FunctionBuilder::RegisterScalar(loader, "ST_CoverageClean", [](ScalarFunctionBuilder &func) {
-                       func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
-                               variant.AddParameter("geoms", LogicalType::LIST(LogicalType::GEOMETRY()));
-                               variant.AddParameter("snapping_distance", LogicalType::DOUBLE);
-                               variant.AddParameter("gap_maximum_width", LogicalType::DOUBLE);
-                               variant.SetReturnType(LogicalType::GEOMETRY());
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_CoverageClean", [](ScalarFunctionBuilder &func) {
+			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
+				variant.AddParameter("geoms", LogicalType::LIST(LogicalType::GEOMETRY()));
+				variant.AddParameter("snapping_distance", LogicalType::DOUBLE);
+				variant.AddParameter("gap_maximum_width", LogicalType::DOUBLE);
+				variant.SetReturnType(LogicalType::GEOMETRY());
 
-                               variant.SetInit(LocalState::Init);
-                       	       variant.SetBind(Bind);
-                               variant.SetFunction(Execute);
-                       });
+				variant.SetInit(LocalState::Init);
+				variant.SetBind(Bind);
+				variant.SetFunction(Execute);
+			});
 
-                       func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
-                               variant.AddParameter("geoms", LogicalType::LIST(LogicalType::GEOMETRY()));
-                               variant.AddParameter("snapping_distance", LogicalType::DOUBLE);
-                               variant.SetReturnType(LogicalType::GEOMETRY());
+			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
+				variant.AddParameter("geoms", LogicalType::LIST(LogicalType::GEOMETRY()));
+				variant.AddParameter("snapping_distance", LogicalType::DOUBLE);
+				variant.SetReturnType(LogicalType::GEOMETRY());
 
-                               variant.SetInit(LocalState::Init);
-                               variant.SetBind(Bind);
-                               variant.SetFunction(Execute);
-                       });
+				variant.SetInit(LocalState::Init);
+				variant.SetBind(Bind);
+				variant.SetFunction(Execute);
+			});
 
-                       func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
-                               variant.AddParameter("geoms", LogicalType::LIST(LogicalType::GEOMETRY()));
-                               variant.SetReturnType(LogicalType::GEOMETRY());
+			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
+				variant.AddParameter("geoms", LogicalType::LIST(LogicalType::GEOMETRY()));
+				variant.SetReturnType(LogicalType::GEOMETRY());
 
-                               variant.SetInit(LocalState::Init);
-                               variant.SetBind(Bind);
-                               variant.SetFunction(Execute);
-                       });
+				variant.SetInit(LocalState::Init);
+				variant.SetBind(Bind);
+				variant.SetFunction(Execute);
+			});
 
-                       func.SetDescription(R"(
+			func.SetDescription(R"(
                                Aligns the edges of a list of polygons whose edges are meant to align but are in fact exact matches.
 
                                Returns a collection of fixed polygons with the same size and order as the input polygons. EMPTY will be used in place of collapsed polygons.
                        )");
-                       func.SetTag("ext", "spatial");
-                       func.SetTag("category", "construction");
-               });
-       }
+			func.SetTag("ext", "spatial");
+			func.SetTag("category", "construction");
+		});
+	}
 };
 
 struct ST_CoverageInvalidEdges {
@@ -2243,35 +2242,36 @@ struct ST_ShortestLine {
 };
 
 struct ST_Snap {
-    static void Execute(DataChunk &args, ExpressionState &state, Vector &result) {
-        auto &lstate = LocalState::ResetAndGet(state);
-        TernaryExecutor::Execute<string_t, string_t, double, string_t>(
-            args.data[0], args.data[1], args.data[2], result, args.size(),
-            [&](const string_t &geom_blob, const string_t &snap_to_blob, double tolerance) {
-                const auto geom = lstate.Deserialize(geom_blob);
-                const auto snap_to = lstate.Deserialize(snap_to_blob);
-                const auto snapped = geom.get_snap(snap_to, tolerance);
-                return lstate.Serialize(result, snapped);
-            });
-    }
+	static void Execute(DataChunk &args, ExpressionState &state, Vector &result) {
+		auto &lstate = LocalState::ResetAndGet(state);
+		TernaryExecutor::Execute<string_t, string_t, double, string_t>(
+		    args.data[0], args.data[1], args.data[2], result, args.size(),
+		    [&](const string_t &geom_blob, const string_t &snap_to_blob, double tolerance) {
+			    const auto geom = lstate.Deserialize(geom_blob);
+			    const auto snap_to = lstate.Deserialize(snap_to_blob);
+			    const auto snapped = geom.get_snap(snap_to, tolerance);
+			    return lstate.Serialize(result, snapped);
+		    });
+	}
 
-    static void Register(ExtensionLoader &loader) {
-        FunctionBuilder::RegisterScalar(loader, "ST_Snap", [](ScalarFunctionBuilder &func) {
-            func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
-                variant.AddParameter("geom", LogicalType::GEOMETRY());
-                variant.AddParameter("snap_to", LogicalType::GEOMETRY());
-                variant.AddParameter("tolerance", LogicalType::DOUBLE);
-                variant.SetReturnType(LogicalType::GEOMETRY());
-                variant.SetBind(GeoTypes::PropagateCRS);
-                variant.SetInit(LocalState::Init);
-                variant.SetFunction(Execute);
-                variant.CanThrowErrors();
-            });
-            func.SetDescription("Snaps the vertices and segments of a geometry to another geometry's vertices within the given tolerance");
-            func.SetTag("ext", "spatial");
-            func.SetTag("category", "construction");
-        });
-    }
+	static void Register(ExtensionLoader &loader) {
+		FunctionBuilder::RegisterScalar(loader, "ST_Snap", [](ScalarFunctionBuilder &func) {
+			func.AddVariant([](ScalarFunctionVariantBuilder &variant) {
+				variant.AddParameter("geom", LogicalType::GEOMETRY());
+				variant.AddParameter("snap_to", LogicalType::GEOMETRY());
+				variant.AddParameter("tolerance", LogicalType::DOUBLE);
+				variant.SetReturnType(LogicalType::GEOMETRY());
+				variant.SetBind(GeoTypes::PropagateCRS);
+				variant.SetInit(LocalState::Init);
+				variant.SetFunction(Execute);
+				variant.CanThrowErrors();
+			});
+			func.SetDescription("Snaps the vertices and segments of a geometry to another geometry's vertices within "
+			                    "the given tolerance");
+			func.SetTag("ext", "spatial");
+			func.SetTag("category", "construction");
+		});
+	}
 };
 
 struct ST_ClosestPoint {

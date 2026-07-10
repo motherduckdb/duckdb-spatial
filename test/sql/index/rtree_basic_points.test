@@ -1,3 +1,6 @@
+# name: test/sql/index/rtree_basic_points.test
+# group: [index]
+
 require spatial
 
 statement ok

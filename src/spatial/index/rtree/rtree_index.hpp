@@ -33,6 +33,12 @@ public:
 	unique_ptr<IndexScanState> InitializeScan(const Box2D<float> &query) const;
 	idx_t Scan(IndexScanState &state, Vector &result) const;
 
+	//! Estimate the fraction of indexed rows whose bounds intersect the query bounds, by walking the top of the R-tree
+	double EstimateSelectivity(const RTreeBounds &query) const;
+
+	//! Whether an index scan over the given query bounds is estimated to be selective enough to beat a full table scan
+	bool ShouldUseIndexScan(ClientContext &context, const RTreeBounds &query, idx_t total_rows) const;
+
 	static unique_ptr<BoundIndex> Create(CreateIndexInput &input) {
 		auto res = make_uniq<RTreeIndex>(input.name, input.constraint_type, input.column_ids, input.table_io_manager,
 		                                 input.unbound_expressions, input.db, input.options, input.context,

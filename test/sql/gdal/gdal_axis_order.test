@@ -1,3 +1,6 @@
+# name: test/sql/gdal/gdal_axis_order.test
+# group: [gdal]
+
 require spatial
 
 statement ok
