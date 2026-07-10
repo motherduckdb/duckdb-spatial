@@ -1,3 +1,6 @@
+# name: test/sql/index/rtree_basic_data.test_slow
+# group: [index]
+
 require parquet
 
 require spatial

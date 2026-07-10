@@ -1,3 +1,6 @@
+# name: test/sql/index/rtree_crs.test
+# group: [index]
+
 # Test that RTREE indexes can be created over GEOMETRY columns with a CRS
 require spatial
 

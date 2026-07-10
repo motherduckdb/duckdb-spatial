@@ -477,7 +477,7 @@ inline GeosGeometry GeosGeometry::get_shortest_line(const GeosGeometry &other) c
 }
 
 inline GeosGeometry GeosGeometry::get_snap(const GeosGeometry &other, double tolerance) const {
-    return GeosGeometry(handle, GEOSSnap_r(handle, geom, other.geom, tolerance));
+	return GeosGeometry(handle, GEOSSnap_r(handle, geom, other.geom, tolerance));
 }
 
 inline GeosGeometry GeosGeometry::get_simplified(double tolerance) const {
@@ -532,7 +532,7 @@ inline GeosGeometry GeosGeometry::get_coverage_clean(double snapping_distance, d
 		}
 	};
 
-	unique_ptr<GEOSCoverageCleanParams, ParamsDeleter> params(params_raw, ParamsDeleter{handle});
+	unique_ptr<GEOSCoverageCleanParams, ParamsDeleter> params(params_raw, ParamsDeleter {handle});
 
 	// Conditionally set optional parameters; check return codes and fail fast
 	if (snapping_distance >= 0) {

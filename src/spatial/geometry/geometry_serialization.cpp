@@ -7,6 +7,7 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/types/geometry.hpp"
 #include "duckdb/common/types/string_type.hpp"
+#include "duckdb/common/types/value.hpp"
 #include "duckdb/storage/arena_allocator.hpp"
 
 namespace duckdb {
@@ -300,6 +301,14 @@ uint32_t Serde::TryGetBounds(const string_t &blob, Box2D<float> &bbox) {
 	bbox.max.x = MathUtil::DoubleToFloatUp(extent.x_max);
 	bbox.max.y = MathUtil::DoubleToFloatUp(extent.y_max);
 	return count;
+}
+
+bool Serde::TryGetBounds(const Value &value, Box2D<float> &bbox) {
+	if (value.IsNull()) {
+		return false;
+	}
+	const auto &blob = StringValue::Get(value);
+	return TryGetBounds(string_t(blob.data(), static_cast<uint32_t>(blob.size())), bbox) != 0;
 }
 
 } // namespace duckdb

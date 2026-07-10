@@ -15,6 +15,7 @@
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/table_filter.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
+#include "duckdb/planner/filter/optional_filter.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
 
@@ -87,20 +88,13 @@ public:
 	FlatRTree(Allocator &alloc, uint32_t item_count_p, uint32_t node_size_p)
 	    : item_count(item_count_p), node_size(node_size_p) {
 
-		uint32_t count = item_count;
-		uint32_t nodes = item_count;
-
-		layer_bounds.push_back(nodes);
+		ComputeLayerBounds();
 
 		if (item_count_p == 0) {
 			return;
 		}
 
-		do {
-			count = (count + node_size - 1) / node_size;
-			nodes += count;
-			layer_bounds.push_back(nodes);
-		} while (count > 1);
+		const auto nodes = layer_bounds.back();
 
 		box_array_mem = alloc.Allocate(sizeof(Box) * nodes);
 		idx_array_mem = alloc.Allocate(sizeof(uint32_t) * nodes);
@@ -228,7 +222,18 @@ public:
 	}
 
 	void Build() {
-		D_ASSERT(item_count == current_position);
+		D_ASSERT(current_position <= item_count);
+
+		if (current_position < item_count) {
+			// Fewer items were pushed than the tree was sized for, shrink to what was actually pushed.
+			item_count = current_position;
+			ComputeLayerBounds();
+		}
+
+		if (item_count == 0) {
+			// Nothing was pushed, there is nothing to build, and scans are guarded by Count() == 0.
+			return;
+		}
 
 		if (item_count <= node_size) {
 			box_array[current_position++] = tree_box;
@@ -299,7 +304,9 @@ public:
 			state.search_queue.pop();
 		}
 		state.search_box = box;
-		state.entry_beg = box_array.size() - 1;
+		// The root node is the last entry of the top layer.
+		// Note that this may be less than box_array.size() - 1 when Build() shrank the tree below its allocated size.
+		state.entry_beg = layer_bounds.back() - 1;
 		state.entry_pos = state.entry_beg;
 
 		state.exhausted = false;
@@ -369,6 +376,22 @@ public:
 	}
 
 private:
+	//! (Re)compute the cumulative per-layer node counts for the current item_count
+	void ComputeLayerBounds() {
+		layer_bounds.clear();
+		uint32_t count = item_count;
+		uint32_t nodes = item_count;
+		layer_bounds.push_back(nodes);
+		if (item_count == 0) {
+			return;
+		}
+		do {
+			count = (count + node_size - 1) / node_size;
+			nodes += count;
+			layer_bounds.push_back(nodes);
+		} while (count > 1);
+	}
+
 	vector<uint32_t> layer_bounds;
 
 	AllocatedData box_array_mem;
@@ -420,7 +443,8 @@ static Value MakeEnvelopeValue(ClientContext &context, const Box2D<float> &box) 
 	children.push_back(make_uniq<BoundConstantExpression>(Value::DOUBLE(box.max.x)));
 	children.push_back(make_uniq<BoundConstantExpression>(Value::DOUBLE(box.max.y)));
 
-	auto envelope_expr = make_uniq<BoundFunctionExpression>(LogicalType::GEOMETRY(), func, std::move(children), nullptr);
+	auto envelope_expr =
+	    make_uniq<BoundFunctionExpression>(LogicalType::GEOMETRY(), func, std::move(children), nullptr);
 
 	return ExpressionExecutor::EvaluateScalar(context, *envelope_expr);
 }
@@ -428,19 +452,25 @@ static Value MakeEnvelopeValue(ClientContext &context, const Box2D<float> &box) 
 // Build an `ST_Intersects_Extent(<column>, <const envelope>)` expression filter for the build-side bounding box.
 // The column is referenced as BoundReference index 0
 // - (the convention for expression filters, which are evaluated against the single filtered column).
-static unique_ptr<TableFilter> MakeBoundingBoxFilter(ClientContext &context, const Value &envelope) {
+static unique_ptr<TableFilter> MakeBoundingBoxFilter(ClientContext &context, const Value &envelope,
+                                                     const LogicalType &column_type) {
 	auto &catalog = Catalog::GetSystemCatalog(context);
 	auto &entry = catalog.GetEntry<ScalarFunctionCatalogEntry>(context, DEFAULT_SCHEMA, "ST_Intersects_Extent");
-	auto func =
-	    entry.functions.GetFunctionByArguments(context, {LogicalType::GEOMETRY(), LogicalType::GEOMETRY()});
+	auto func = entry.functions.GetFunctionByArguments(context, {LogicalType::GEOMETRY(), LogicalType::GEOMETRY()});
 
+	// The column reference must carry the column's exact type (e.g. GEOMETRY with a CRS)
 	vector<unique_ptr<Expression>> children;
-	children.push_back(make_uniq<BoundReferenceExpression>(LogicalType::GEOMETRY(), 0));
+	children.push_back(make_uniq<BoundReferenceExpression>(column_type, 0));
 	children.push_back(make_uniq<BoundConstantExpression>(envelope));
 
 	auto predicate = make_uniq<BoundFunctionExpression>(LogicalType::BOOLEAN, func, std::move(children), nullptr);
 
-	return make_uniq<ExpressionFilter>(std::move(predicate));
+	// The filter is redundant with the join itself (every probe row is checked exactly against the R-tree),
+	// so wrap it as optional, mirroring what the hash join does with its pushed min/max filters.
+	// This makes the filter still participate in stats pruning and can feed a deferred R-tree scan its bounds,
+	// but it skips the per-row evaluation, which would deserialize geometries per probe row just to pre-check a bbox.
+	// (which the r-tree in the spatial join already does)
+	return make_uniq<OptionalFilter>(make_uniq<ExpressionFilter>(std::move(predicate)));
 }
 
 //======================================================================================================================
@@ -795,6 +825,12 @@ SinkFinalizeType PhysicalSpatialJoin::Finalize(Pipeline &pipeline, Event &event,
 			bbox.max.x = xmax_data[row_idx];
 			bbox.max.y = ymax_data[row_idx];
 
+			if (std::isnan(bbox.min.x) || std::isnan(bbox.min.y) || std::isnan(bbox.max.x) || std::isnan(bbox.max.y)) {
+				// Skip geometries with NaN bounds: they can never satisfy a spatial predicate.
+				// A NaN box would corrupt every union it participates in, silently dropping matches of other rows.
+				continue;
+			}
+
 			if (has_const_distance) {
 				// If this is a ST_DWithin join, we need to expand the bounding box by the constant distance
 				const auto f_dist = MathUtil::DoubleToFloatUp(const_distance);
@@ -819,7 +855,8 @@ SinkFinalizeType PhysicalSpatialJoin::Finalize(Pipeline &pipeline, Event &event,
 	if (!filter_pushdown_targets.empty() && gstate.rtree->Count() > 0) {
 		const auto envelope = MakeEnvelopeValue(context, gstate.rtree->Bounds());
 		for (auto &target : filter_pushdown_targets) {
-			target.dynamic_filters->PushFilter(*this, target.probe_column_index, MakeBoundingBoxFilter(context, envelope));
+			target.dynamic_filters->PushFilter(*this, target.probe_column_index,
+			                                   MakeBoundingBoxFilter(context, envelope, target.column_type));
 		}
 	}
 

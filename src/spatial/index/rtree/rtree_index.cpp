@@ -158,11 +158,10 @@ idx_t RTreeIndex::Scan(IndexScanState &state, Vector &result) const {
 	return output_idx;
 }
 
-//! Estimate the fraction of indexed rows whose bounds intersect the query, by descending the top levels
-//! of the R-tree and apportioning each node's weight equally over its children. Node capacities are
-//! bounded (min/max capacity), so same-level subtrees hold roughly equal row counts, which makes this a
-//! much better estimate on spatially skewed data than comparing bounding-box areas. The node budget
-//! bounds the work: once exhausted, remaining partial overlaps fall back to a fractional area estimate.
+//! Estimate the fraction of indexed rows whose bounds intersect the query, by descending the top levels of the R-tree
+//! and partition each node's weight equally over its children. Node capacities are bounded (min/max capacity), so
+//! same-level subtrees hold roughly equal row counts, which makes this a much better estimate on spatially skewed data
+//! After the node budget is exhausted, remaining partial overlaps fall back to a fractional area estimate.
 static double EstimateOverlap(const RTree &tree, const RTreeEntry &entry, const RTreeBounds &query,
                               idx_t &node_budget) {
 	if (!query.Intersects(entry.bounds)) {
@@ -198,7 +197,14 @@ static double EstimateOverlap(const RTree &tree, const RTreeEntry &entry, const 
 }
 
 double RTreeIndex::EstimateSelectivity(const RTreeBounds &query) const {
-	idx_t node_budget = 256;
+	// Bounds the number of nodes the estimate may visit.
+	// Only nodes *partially* overlapping the query consume budget (disjoint and contained subtrees resolve immediately)
+	// so this covers the query boundary of trees far larger than 256 nodes.
+	// With the min node capacity of 50, two fully descended levels resolve to ~1/(50*50) = 0.04% of the indexed rows,
+	// far below the default 7.5% rtree_index_scan_ratio threshold the estimate is compared to.
+	static constexpr idx_t ESTIMATE_NODE_BUDGET = 256;
+
+	idx_t node_budget = ESTIMATE_NODE_BUDGET;
 	return EstimateOverlap(*tree, tree->GetRoot(), query, node_budget);
 }
 
@@ -206,8 +212,8 @@ bool RTreeIndex::ShouldUseIndexScan(ClientContext &context, const RTreeBounds &q
 	const auto estimated_rows = EstimateSelectivity(query) * static_cast<double>(total_rows);
 	const auto max_ratio = SpatialSettings::RTreeIndexScanRatio(context);
 	const auto min_rows = SpatialSettings::RTreeIndexScanMinRows(context);
-	// Use the index if the estimated number of matching rows is below the ratio threshold,
-	// or small enough in absolute terms that the plan choice does not matter
+	// Use the index if the estimated number of matching rows is below the ratio threshold, or small enough in absolute
+	// terms that the plan choice does not matter
 	return estimated_rows <= MaxValue(max_ratio * static_cast<double>(total_rows), static_cast<double>(min_rows));
 }
 

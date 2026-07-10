@@ -23,8 +23,8 @@ struct RTreeIndexScanBindData final : public TableFunctionData {
 	//! The bounds to scan
 	RTreeBounds bbox;
 
-	//! If set, the bounds are not known at plan time. Instead they are resolved when the scan is initialized,
-	//! from a bounding-box filter pushed into the scan at runtime (e.g. by a spatial join build side).
+	//! If set, the bounds are not known at plan time, but only when the scan is initialized from a bounding-box filter
+	//! pushed into the scan at runtime (e.g. by a spatial join build side).
 	//! If no such filter arrives (or it is not selective enough), the scan falls back to a full table scan.
 	bool deferred_bounds;
 

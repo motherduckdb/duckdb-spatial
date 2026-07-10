@@ -1,3 +1,6 @@
+# name: test/sql/index/rtree_join_deferred.test
+# group: [index]
+
 # Test that a spatial join can probe an R-tree index through its pushed-down bounding-box filter:
 # the probe-side seq scan is replaced with a "deferred bounds" index scan that resolves its query
 # bounds at runtime from the filter the join pushes, falling back to a full table scan when the

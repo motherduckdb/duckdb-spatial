@@ -1,3 +1,6 @@
+# name: test/sql/join/spatial_join_test_3.test_slow
+# group: [join]
+
 require spatial
 
 statement ok

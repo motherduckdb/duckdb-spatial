@@ -1,3 +1,6 @@
+# name: test/sql/index/rtree_parallel_scan.test
+# group: [index]
+
 # Test that the RTREE index scan produces correct results when running with multiple threads
 require spatial
 

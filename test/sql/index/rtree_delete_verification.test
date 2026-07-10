@@ -1,3 +1,6 @@
+# name: test/sql/index/rtree_delete_verification.test
+# group: [index]
+
 # DELETE with an indexable spatial predicate on an RTREE-indexed table used to throw
 # "INTERNAL Error: Failed to find referenced virtual column" under enable_verification,
 # because the rtree_index_scan function did not expose the table's virtual columns
