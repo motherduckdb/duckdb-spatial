@@ -10,6 +10,7 @@
 
 // DuckDB
 #include "duckdb/common/constants.hpp"
+#include "duckdb/logging/logger.hpp"
 #include "duckdb/common/types/blob.hpp"
 #include "duckdb/common/vector_operations/generic_executor.hpp"
 #include "duckdb/execution/expression_executor.hpp"
@@ -4995,6 +4996,7 @@ struct ST_GeomFromWKB {
 
 				variant.SetInit(LocalState::Init);
 				variant.SetFunction(ExecuteLineString);
+				variant.CanThrowErrors();
 			});
 
 			builder.SetDescription("Deserialize a LINESTRING_2D from a WKB encoded blob");
@@ -5010,6 +5012,7 @@ struct ST_GeomFromWKB {
 
 				variant.SetInit(LocalState::Init);
 				variant.SetFunction(ExecutePolygon);
+				variant.CanThrowErrors();
 			});
 
 			builder.SetDescription("Deserialize a POLYGON_2D from a WKB encoded blob");
