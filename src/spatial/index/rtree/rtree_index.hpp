@@ -5,6 +5,7 @@
 #include "spatial/index/rtree/rtree.hpp"
 
 #include "duckdb/execution/index/bound_index.hpp"
+#include "duckdb/execution/index/index_type.hpp"
 #include "duckdb/execution/index/fixed_size_allocator.hpp"
 #include "duckdb/execution/index/index_pointer.hpp"
 
@@ -58,7 +59,7 @@ public:
 	//! Serializes RTree memory to the WAL and returns the index storage information.
 	IndexStorageInfo SerializeToWAL(const case_insensitive_map_t<Value> &options) override;
 
-	idx_t GetInMemorySize(IndexLock &state) override;
+	idx_t GetInMemorySize(IndexLock &state) const override;
 
 	//! Merge another index into this index. The lock obtained from InitializeLock must be held, and the other
 	//! index must also be locked during the merge
@@ -80,7 +81,7 @@ public:
 	void VerifyBuffers(IndexLock &l) override;
 
 	string GetConstraintViolationMessage(VerifyExistenceType verify_type, idx_t failed_index,
-	                                     DataChunk &input) override {
+	                                     DataChunk &input) const override {
 		return "Constraint violation in RTree index";
 	}
 };

@@ -124,7 +124,7 @@ struct EncodingUtil {
 SAFile DuckDBShapefileOpen(void *userData, const char *filename, const char *access_mode) {
 	try {
 		auto &fs = *static_cast<FileSystem *>(userData);
-		constexpr auto flags = FileFlags::FILE_FLAGS_READ | FileFlags::FILE_FLAGS_NULL_IF_NOT_EXISTS;
+		const auto flags = FileFlags::FILE_FLAGS_READ | FileFlags::FILE_FLAGS_NULL_IF_NOT_EXISTS;
 		auto file_handle = fs.OpenFile(filename, flags);
 		if (!file_handle) {
 			return nullptr;
@@ -194,7 +194,7 @@ int DuckDBShapefileClose(SAFile file) {
 int DuckDBShapefileRemove(void *userData, const char *filename) {
 	try {
 		auto &fs = *reinterpret_cast<FileSystem *>(userData);
-		constexpr auto flags = FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_NULL_IF_NOT_EXISTS;
+		const auto flags = FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_NULL_IF_NOT_EXISTS;
 		const auto file = fs.OpenFile(filename, flags);
 		if (!file) {
 			return -1;
@@ -291,7 +291,7 @@ struct ST_ReadSHP {
 	};
 
 	static unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &input,
-	                                     vector<LogicalType> &return_types, vector<string> &names) {
+	                                     vector<LogicalType> &return_types, vector<Identifier> &names) {
 
 		auto file_name = StringValue::Get(input.inputs[0]);
 		auto result = make_uniq<ShapefileBindData>(file_name);
@@ -412,7 +412,7 @@ struct ST_ReadSHP {
 			idx_t count = 1;
 			for (size_t j = i + 1; j < names.size(); j++) {
 				if (names[i] == names[j]) {
-					names[j] += "_" + std::to_string(count++);
+					names[j] = Identifier(names[j].GetIdentifierName() + "_" + std::to_string(count++));
 				}
 			}
 		}
@@ -946,7 +946,7 @@ struct Shapefile_Meta {
 	};
 
 	static unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &input,
-	                                     vector<LogicalType> &return_types, vector<string> &names) {
+	                                     vector<LogicalType> &return_types, vector<Identifier> &names) {
 
 		auto result = make_uniq<ShapeFileMetaBindData>();
 
@@ -966,8 +966,8 @@ struct Shapefile_Meta {
 			auto str = string_t(shape_type_map[i].shp_name);
 			varchar_data[i] = str.IsInlined() ? str : StringVector::AddString(varchar_vector, str);
 		}
-		auto shape_type_enum = LogicalType::ENUM("SHAPE_TYPE", varchar_vector, shape_type_count);
-		shape_type_enum.SetAlias("SHAPE_TYPE");
+		auto shape_type_enum =
+		    LogicalType::ENUM("SHAPE_TYPE", varchar_vector, shape_type_count).WithAlias("SHAPE_TYPE");
 
 		return_types.push_back(LogicalType::VARCHAR);
 		return_types.push_back(shape_type_enum);
