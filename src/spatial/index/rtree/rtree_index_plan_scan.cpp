@@ -205,6 +205,11 @@ public:
 			// this is a LogicalGet - check if there is an ExpressionFilter
 			auto &get = op.Cast<LogicalGet>();
 			for (auto &entry : get.table_filters.filters) {
+				if (entry.first == COLUMN_IDENTIFIER_ROW_ID) {
+					// rowid shares its numeric value with optional_idx::INVALID_INDEX, so passing this key
+					// on would throw; there is no rtree index on rowid to find anyway
+					continue;
+				}
 				if (entry.second->filter_type != TableFilterType::EXPRESSION_FILTER) {
 					// not an expression filter
 					continue;

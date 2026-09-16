@@ -1,0 +1,30 @@
+# name: test/sql/index/rtree_rowid_expression_filter.test
+# description: A rowid expression filter must not reach the rtree scan optimizer as a column index
+# group: [rtree]
+
+require spatial
+
+# Nothing here is spatial on purpose. Registering the rtree scan optimizer is database-wide, and duckdb
+# runs every registered optimizer extension over every plan, so the pass walks plain scans like this one
+# looking for something to rewrite. On a LOGICAL_GET it iterates the scan's expression filters and passes
+# each filter's map key on as a column index; COLUMN_IDENTIFIER_ROW_ID and optional_idx::INVALID_INDEX are
+# both idx_t(-1), so a rowid-keyed filter threw "optional_idx cannot be initialized with an invalid index".
+# The "does this table have an rtree index?" check lives inside the callee, so it ran one step too late to
+# save us - hence no index and no geometry are needed to reproduce.
+
+statement ok
+CREATE TABLE t (i INTEGER);
+
+statement ok
+INSERT INTO t VALUES (10), (20), (30), (40);
+
+query I
+SELECT count(*) FROM t WHERE rowid % 2 = 0;
+----
+2
+
+query I
+SELECT i FROM t WHERE rowid % 2 = 1 ORDER BY i;
+----
+20
+40
