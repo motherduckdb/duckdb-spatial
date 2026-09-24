@@ -232,22 +232,17 @@ struct ST_AsMVTGeom {
 
 	static unique_ptr<FunctionData> Bind(BindScalarFunctionInput &input) {
 		auto &arguments = input.GetArguments();
-		auto &bound_function = input.GetBoundFunction();
 		auto &context = input.GetClientContext();
 
 		auto result = make_uniq<BindData>();
 
 		// Extract parameters
-		auto folded_extent = false;
-		auto folded_buffer = false;
-		auto folded_clip = false;
 
 		if (arguments.size() >= 3) {
 			auto &extent_expr = arguments[2];
 			if (extent_expr->IsFoldable()) {
 				auto extent_val = ExpressionExecutor::EvaluateScalar(context, *extent_expr);
 				result->extent = extent_val.GetValue<int32_t>();
-				folded_extent = true;
 			} else {
 				throw InvalidInputException("ST_AsMVTGeom: \"tile_extent\" must be a constant");
 			}
@@ -257,7 +252,6 @@ struct ST_AsMVTGeom {
 			if (buffer_expr->IsFoldable()) {
 				auto buffer_val = ExpressionExecutor::EvaluateScalar(context, *buffer_expr);
 				result->buffer = buffer_val.GetValue<int32_t>();
-				folded_buffer = true;
 			} else {
 				throw InvalidInputException("ST_AsMVTGeom: \"buffer\" must be a constant");
 			}
@@ -267,22 +261,12 @@ struct ST_AsMVTGeom {
 			if (clip_geom_expr->IsFoldable()) {
 				auto clip_geom_val = ExpressionExecutor::EvaluateScalar(context, *clip_geom_expr);
 				result->clip = clip_geom_val.GetValue<bool>();
-				folded_clip = true;
 			} else {
 				throw InvalidInputException("ST_AsMVTGeom: \"clip_geom\" must be a constant");
 			}
 		}
 
-		// Erase back to front
-		if (folded_clip) {
-			Function::EraseArgument(bound_function, arguments, 4);
-		}
-		if (folded_buffer) {
-			Function::EraseArgument(bound_function, arguments, 3);
-		}
-		if (folded_extent) {
-			Function::EraseArgument(bound_function, arguments, 2);
-		}
+		// the folded arguments stay part of the expression tree - Execute only reads the leading two arguments
 
 		return std::move(result);
 	}
@@ -2675,7 +2659,7 @@ struct ST_Union_Agg {
 		}
 	};
 
-	static idx_t StateSize(const BoundAggregateFunction &) {
+	static idx_t StateSize(AggregateStateInput &) {
 		return sizeof(State);
 	}
 
@@ -2700,12 +2684,14 @@ struct ST_Union_Agg {
 		return GeosSerde::Deserialize(context, arena, ptr, size);
 	}
 
-	static void Initialize(const BoundAggregateFunction &, data_ptr_t state_mem) {
-		const auto state_ptr = new (state_mem) State();
-		auto &state = *state_ptr;
-		state.context = GEOS_init_r();
-		GEOSContext_setErrorMessageHandler_r(
-		    state.context, [](const char *message, void *) { throw InvalidInputException(message); }, nullptr);
+	static void Initialize(AggregateStateInput &, data_ptr_t *states, idx_t count) {
+		for (idx_t i = 0; i < count; i++) {
+			const auto state_ptr = new (states[i]) State();
+			auto &state = *state_ptr;
+			state.context = GEOS_init_r();
+			GEOSContext_setErrorMessageHandler_r(
+			    state.context, [](const char *message, void *) { throw InvalidInputException(message); }, nullptr);
+		}
 	}
 
 	static void Update(Vector inputs[], AggregateInputData &aggr, idx_t, Vector &state_vec, idx_t count) {
@@ -2905,12 +2891,14 @@ struct GEOSCoverageAggFunction {
 		return GeosSerde::Deserialize(context, arena, ptr, size);
 	}
 
-	static void Initialize(const BoundAggregateFunction &, data_ptr_t state_mem) {
-		const auto state_ptr = new (state_mem) State();
-		auto &state = *state_ptr;
-		state.context = GEOS_init_r();
-		GEOSContext_setErrorMessageHandler_r(
-		    state.context, [](const char *message, void *) { throw InvalidInputException(message); }, nullptr);
+	static void Initialize(AggregateStateInput &, data_ptr_t *states, idx_t count) {
+		for (idx_t i = 0; i < count; i++) {
+			const auto state_ptr = new (states[i]) State();
+			auto &state = *state_ptr;
+			state.context = GEOS_init_r();
+			GEOSContext_setErrorMessageHandler_r(
+			    state.context, [](const char *message, void *) { throw InvalidInputException(message); }, nullptr);
+		}
 	}
 
 	static void Absorb(Vector &state_vec, Vector &combined, AggregateInputData &aggr_input_data, idx_t count) {
@@ -2974,7 +2962,7 @@ struct GEOSCoverageAggFunction {
 		}
 	}
 
-	static idx_t StateSize(const BoundAggregateFunction &) {
+	static idx_t StateSize(AggregateStateInput &) {
 		return sizeof(State);
 	}
 

@@ -4,6 +4,9 @@
 
 // DUCKDB
 #include "duckdb/main/extension/extension_loader.hpp"
+#include "duckdb/logging/logger.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
+#include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/function/copy_function.hpp"
 #include "duckdb/function/table/arrow.hpp"
 #include "duckdb/common/arrow/arrow_converter.hpp"
@@ -644,7 +647,7 @@ public:
 	OGRwkbGeometryType layer_type = wkbUnknown;
 };
 
-auto Bind(ClientContext &ctx, TableFunctionBindInput &input, vector<LogicalType> &col_types, vector<string> &col_names)
+auto Bind(ClientContext &ctx, TableFunctionBindInput &input, vector<LogicalType> &col_types, vector<Identifier> &col_names)
     -> unique_ptr<FunctionData> {
 
 	auto result = make_uniq<BindData>();
@@ -809,7 +812,7 @@ auto Bind(ClientContext &ctx, TableFunctionBindInput &input, vector<LogicalType>
 				// Rename the geometry column to "geom" unless keep_wkb is set
 				col_names.push_back("geom");
 			} else {
-				col_names.push_back(child_schema.name);
+				col_names.emplace_back(child_schema.name);
 			}
 
 			if (duck_type.id() != LogicalTypeId::GEOMETRY) {
@@ -1249,7 +1252,7 @@ auto ReplacementScan(ClientContext &, ReplacementScanInput &input, optional_ptr<
 
 		auto table_function = make_uniq<TableFunctionRef>();
 		vector<unique_ptr<ParsedExpression>> children;
-		children.push_back(make_uniq<ConstantExpression>(Value(table_name)));
+		children.push_back(ConstantExpression::FromValue(Value(table_name)));
 		table_function->function = make_uniq<FunctionExpression>("ST_Read", std::move(children));
 		return std::move(table_function);
 	}
@@ -1416,8 +1419,8 @@ public:
 	}
 };
 
-bool MatchOption(const char *name, const pair<string, vector<Value>> &option, bool list = false) {
-	if (StringUtil::CIEquals(name, option.first)) {
+bool MatchOption(const char *name, const pair<const Identifier, vector<Value>> &option, bool list = false) {
+	if (option.first == name) {
 		if (option.second.empty()) {
 			throw BinderException("GDAL COPY option '%s' requires a value", name);
 		}
@@ -1845,7 +1848,7 @@ public:
 	idx_t driver_count;
 };
 
-auto Bind(ClientContext &context, TableFunctionBindInput &input, vector<LogicalType> &types, vector<string> &names)
+auto Bind(ClientContext &context, TableFunctionBindInput &input, vector<LogicalType> &types, vector<Identifier> &names)
     -> unique_ptr<FunctionData> {
 
 	types.emplace_back(LogicalType::VARCHAR);
@@ -2003,7 +2006,7 @@ LogicalType GetLayerType() {
 	});
 }
 
-auto Bind(ClientContext &context, TableFunctionBindInput &input, vector<LogicalType> &types, vector<string> &names)
+auto Bind(ClientContext &context, TableFunctionBindInput &input, vector<LogicalType> &types, vector<Identifier> &names)
     -> unique_ptr<FunctionData> {
 	names.push_back("file_name");
 	names.push_back("driver_short_name");

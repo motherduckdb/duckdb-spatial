@@ -10,6 +10,7 @@
 
 // DuckDB
 #include "duckdb/common/constants.hpp"
+#include "duckdb/logging/logger.hpp"
 #include "duckdb/common/types/blob.hpp"
 #include "duckdb/common/vector_operations/generic_executor.hpp"
 #include "duckdb/execution/expression_executor.hpp"
@@ -2670,15 +2671,13 @@ struct ST_DistanceWithin {
 	static unique_ptr<FunctionData> Bind(BindScalarFunctionInput &input) {
 
 		auto &arguments = input.GetArguments();
-		auto &bound_function = input.GetBoundFunction();
 		auto &context = input.GetClientContext();
 
 		if (arguments.back()->IsFoldable()) {
 			const auto dist_expr = ExpressionExecutor::EvaluateScalar(context, *arguments.back());
 			const auto dist_value = dist_expr.GetValue<double>();
 
-			// Erase argument
-			Function::EraseArgument(bound_function, arguments, 2);
+			// the distance argument stays part of the expression tree - Execute reads the folded value instead
 			return make_uniq<BindData>(dist_value, true);
 		}
 
@@ -2695,7 +2694,12 @@ struct ST_DistanceWithin {
 		auto &lhs_vec = args.data[0];
 		auto &rhs_vec = args.data[1];
 
-		if (args.ColumnCount() == 3) {
+		const auto &func_expr = state.expr.Cast<BoundFunctionExpression>();
+		const auto &bind_data = func_expr.BindInfo()->Cast<BindData>();
+
+		// a constant distance is folded into the bind data by the bind - the argument is still there, but the
+		// folded value is used instead. Plans written before the argument was kept have no third argument at all
+		if (!bind_data.is_constant) {
 			auto &dst_vec = args.data[2];
 
 			TernaryExecutor::Execute<string_t, string_t, double, bool>(
@@ -2715,10 +2719,6 @@ struct ST_DistanceWithin {
 				    return false; // TODO: Null
 			    });
 		} else {
-			// No distance argument, so we use the bind data
-			const auto &func_expr = state.expr.Cast<BoundFunctionExpression>();
-			const auto &bind_data = func_expr.BindInfo()->Cast<BindData>();
-
 			const auto distance = bind_data.distance;
 
 			const auto lhs_is_const =
@@ -4995,6 +4995,7 @@ struct ST_GeomFromWKB {
 
 				variant.SetInit(LocalState::Init);
 				variant.SetFunction(ExecuteLineString);
+				variant.CanThrowErrors();
 			});
 
 			builder.SetDescription("Deserialize a LINESTRING_2D from a WKB encoded blob");
@@ -5010,6 +5011,7 @@ struct ST_GeomFromWKB {
 
 				variant.SetInit(LocalState::Init);
 				variant.SetFunction(ExecutePolygon);
+				variant.CanThrowErrors();
 			});
 
 			builder.SetDescription("Deserialize a POLYGON_2D from a WKB encoded blob");
@@ -9478,7 +9480,7 @@ bool ST_DWithinHelper::TryGetConstDistance(const unique_ptr<FunctionData> &bind_
 void RegisterSpatialScalarFunctions(ExtensionLoader &loader) {
 	ST_Affine::Register(loader);
 	ST_Area::Register(loader);
-	ST_AsGeoJSON::Register(loader);
+	// ST_AsGeoJSON::Register(loader);
 	ST_AsText::Register(loader);
 	// ST_AsWKB::Register(loader);
 	ST_AsHEXWKB::Register(loader);
@@ -9505,7 +9507,7 @@ void RegisterSpatialScalarFunctions(ExtensionLoader &loader) {
 	ST_Force4D::Register(loader);
 	ST_GeometryType::Register(loader);
 	ST_GeomFromHEXWKB::Register(loader);
-	ST_GeomFromGeoJSON::Register(loader);
+	// ST_GeomFromGeoJSON::Register(loader);
 	ST_GeomFromText::Register(loader);
 	ST_GeomFromWKB::Register(loader);
 	ST_HasZ::Register(loader);
