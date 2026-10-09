@@ -1,4 +1,5 @@
 #include "duckdb/common/vector/map_vector.hpp"
+#include "duckdb/common/queue.hpp"
 #include "duckdb/common/vector/struct_vector.hpp"
 #include "spatial/operators/spatial_join_physical.hpp"
 #include "spatial/operators/spatial_join_logical.hpp"
@@ -388,7 +389,7 @@ static unique_ptr<Expression> GetBBOXExpression(ClientContext &context, const Lo
 	auto &catalog = Catalog::GetSystemCatalog(context);
 	auto &entry = catalog.GetEntry<ScalarFunctionCatalogEntry>(
 	    context, QualifiedName(catalog.GetName(), Identifier::DefaultSchema(), "ST_Extent_Approx"));
-	const auto &func = entry.functions.GetFunctionByArguments(context, {geom_type});
+	const auto &func = *entry.functions.GetFunctionByArguments(context, {geom_type});
 
 	auto child_expr = make_uniq<BoundReferenceExpression>(geom_type, 0);
 	vector<unique_ptr<Expression>> children;
@@ -425,7 +426,7 @@ PhysicalSpatialJoin::PhysicalSpatialJoin(PhysicalPlan &physical_plan, LogicalOpe
 
 	// Always make sure we have a consistent order of the output columns, regardless if we have projection maps or not
 
-	const auto &lop = op.Cast<LogicalJoin>();
+	const auto &lop = op.Cast<LogicalSpatialJoin>();
 
 	// Probe-side
 	const auto &probe_side_input_types = children[0].get().types;
@@ -549,7 +550,7 @@ public:
 		auto &catalog = Catalog::GetSystemCatalog(context);
 		auto &entry = catalog.GetEntry<ScalarFunctionCatalogEntry>(
 		    context, QualifiedName(catalog.GetName(), Identifier::DefaultSchema(), "ST_IsEmpty"));
-		const auto &func = entry.functions.GetFunctionByArguments(context, {geom_type});
+		const auto &func = *entry.functions.GetFunctionByArguments(context, {geom_type});
 
 		vector<unique_ptr<Expression>> children;
 		children.push_back(make_uniq_base<Expression, BoundReferenceExpression>(geom_type, 0));
