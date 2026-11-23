@@ -268,6 +268,10 @@ public:
 		return BuildRTreeBottomUp(state, mode, *event);
 	}
 
+	string TaskType() const override {
+		return "RTreeIndexConstructionTask";
+	}
+
 private:
 	CreateRTreeIndexGlobalState &state;
 };
